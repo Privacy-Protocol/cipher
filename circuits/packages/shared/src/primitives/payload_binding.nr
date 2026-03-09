@@ -31,6 +31,13 @@ pub fn prove_payload_binding(
     payload_digest: Field,
     payload_salt: Field,
 ) {
-    let expected = derive_payload_hash(app_id, action_type, context_id, schema_hash, payload_digest, payload_salt);
+    let expected = derive_payload_hash(
+        app_id,
+        action_type,
+        context_id,
+        schema_hash,
+        payload_digest,
+        payload_salt,
+    );
     assert(expected == payload_hash);
 }

@@ -1,6 +1,3 @@
-[package]
-name = "circuits"
-type = "bin"
-authors = [""]
-
-[dependencies]
+[workspace]
+members = ["packages/shared", "packages/voting", "packages/credential_gate"]
+default-member = "packages/voting"

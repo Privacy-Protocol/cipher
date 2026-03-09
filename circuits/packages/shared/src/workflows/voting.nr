@@ -29,7 +29,13 @@ pub fn prove_voting(
     let leaf = membership::member_leaf(identity_secret, membership_secret);
     membership::prove_membership(root, leaf, path_elements, path_indices);
 
-    nullifier::prove_nullifier(nullifier_hash, nullifier_secret, app_id, action_type, context_id);
+    nullifier::prove_nullifier(
+        nullifier_hash,
+        nullifier_secret,
+        app_id,
+        action_type,
+        context_id,
+    );
 
     range_policy::prove_vote_option(vote_option, option_count);
 
