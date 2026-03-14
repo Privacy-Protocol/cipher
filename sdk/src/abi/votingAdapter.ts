@@ -1,6 +1,32 @@
 export const VOTING_ADAPTER_ABI = [
   {
     type: "function",
+    name: "computeContextId",
+    stateMutability: "view",
+    inputs: [
+      { name: "dao", type: "address" },
+      { name: "externalReference", type: "bytes32" }
+    ],
+    outputs: [{ type: "bytes32" }]
+  },
+  {
+    type: "function",
+    name: "getContextLink",
+    stateMutability: "view",
+    inputs: [{ name: "contextId", type: "bytes32" }],
+    outputs: [
+      {
+        type: "tuple",
+        components: [
+          { name: "dao", type: "address" },
+          { name: "externalReference", type: "bytes32" },
+          { name: "linked", type: "bool" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
     name: "getVote",
     stateMutability: "view",
     inputs: [{ name: "actionId", type: "bytes32" }],
@@ -19,6 +45,33 @@ export const VOTING_ADAPTER_ABI = [
         ]
       }
     ]
+  },
+  {
+    type: "function",
+    name: "getTally",
+    stateMutability: "view",
+    inputs: [{ name: "contextId", type: "bytes32" }],
+    outputs: [
+      {
+        type: "tuple",
+        components: [
+          { name: "forVotes", type: "uint256" },
+          { name: "againstVotes", type: "uint256" },
+          { name: "abstainVotes", type: "uint256" },
+          { name: "tallyCommitment", type: "bytes32" },
+          { name: "submitter", type: "address" },
+          { name: "submittedAt", type: "uint64" },
+          { name: "finalized", type: "bool" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
+    name: "isTallyFinalized",
+    stateMutability: "view",
+    inputs: [{ name: "contextId", type: "bytes32" }],
+    outputs: [{ type: "bool" }]
   },
   {
     type: "function",

@@ -11,7 +11,14 @@ import { ZERO_BYTES32 } from "../config";
 import { CipherError } from "../errors";
 import { assertProofBindings, buildActionRequestFromProof, encodeVoteAdapterData } from "../proof";
 import { submitCipherAction } from "../router";
-import type { VotingExecuteResult, VotingInput, VotingPrepared, VotingRecord } from "../types/voting";
+import type {
+  VotingContextLink,
+  VotingExecuteResult,
+  VotingInput,
+  VotingPrepared,
+  VotingProposalTally,
+  VotingRecord
+} from "../types/voting";
 import { asBytes32 } from "../utils/bytes";
 import type { CipherClientContext } from "../client/types";
 
@@ -167,6 +174,60 @@ export class VotingModule {
       submitter: typed.submitter,
       submittedAt: typed.submittedAt
     };
+  }
+
+  async getTally(contextId: string | `0x${string}`): Promise<VotingProposalTally> {
+    const result = await this.ctx.publicClient.readContract({
+      address: this.ctx.config.adapters.voting,
+      abi: VOTING_ADAPTER_ABI,
+      functionName: "getTally",
+      args: [asBytes32(contextId)]
+    });
+    const typed = result as unknown as VotingProposalTally;
+
+    return {
+      forVotes: typed.forVotes,
+      againstVotes: typed.againstVotes,
+      abstainVotes: typed.abstainVotes,
+      tallyCommitment: typed.tallyCommitment,
+      submitter: typed.submitter,
+      submittedAt: typed.submittedAt,
+      finalized: typed.finalized
+    };
+  }
+
+  async isTallyFinalized(contextId: string | `0x${string}`): Promise<boolean> {
+    return this.ctx.publicClient.readContract({
+      address: this.ctx.config.adapters.voting,
+      abi: VOTING_ADAPTER_ABI,
+      functionName: "isTallyFinalized",
+      args: [asBytes32(contextId)]
+    });
+  }
+
+  async getContextLink(contextId: string | `0x${string}`): Promise<VotingContextLink> {
+    const result = await this.ctx.publicClient.readContract({
+      address: this.ctx.config.adapters.voting,
+      abi: VOTING_ADAPTER_ABI,
+      functionName: "getContextLink",
+      args: [asBytes32(contextId)]
+    });
+    const typed = result as unknown as VotingContextLink;
+
+    return {
+      dao: typed.dao,
+      externalReference: typed.externalReference,
+      linked: typed.linked
+    };
+  }
+
+  async computeContextId(dao: `0x${string}`, externalReference: string | `0x${string}`): Promise<`0x${string}`> {
+    return this.ctx.publicClient.readContract({
+      address: this.ctx.config.adapters.voting,
+      abi: VOTING_ADAPTER_ABI,
+      functionName: "computeContextId",
+      args: [dao, asBytes32(externalReference)]
+    });
   }
 
   async getProposalState(contextId: string | `0x${string}`): Promise<{

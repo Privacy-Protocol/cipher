@@ -2,7 +2,7 @@
 import {
   CipherError,
   createCipherClient
-} from "./chunk-KM5B74LD.js";
+} from "./chunk-BTXVJWZR.js";
 
 // src/react/CipherProvider.tsx
 import { createContext, useContext, useMemo } from "react";

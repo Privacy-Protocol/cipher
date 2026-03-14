@@ -10,6 +10,7 @@ import {VerifierRegistry} from "../../src/core/VerifierRegistry.sol";
 import {NullifierStore} from "../../src/core/NullifierStore.sol";
 import {CredentialGateAdapter} from "../../src/adapters/CredentialGateAdapter.sol";
 import {VotingAdapter} from "../../src/adapters/VotingAdapter.sol";
+import {ICipherVotingSource} from "../../src/interfaces/ICipherVotingSource.sol";
 import {HonkVerifier as CredentialGateHonkVerifier} from "../../src/verifiers/CredentialGateVerifier.sol";
 import {HonkVerifier as VotingHonkVerifier} from "../../src/verifiers/VotingVerifier.sol";
 
@@ -25,6 +26,20 @@ contract CipherRouterTest is Test {
         bytes32 payloadHash,
         bytes32 encryptedPayloadRef,
         address sender
+    );
+    event ContextLinked(
+        bytes32 indexed contextId,
+        address indexed dao,
+        bytes32 indexed externalReference
+    );
+    event TallySubmitted(
+        bytes32 indexed contextId,
+        uint256 forVotes,
+        uint256 againstVotes,
+        uint256 abstainVotes,
+        bytes32 tallyCommitment,
+        address submitter,
+        bool finalized
     );
 
     struct ProofBundle {
@@ -46,8 +61,13 @@ contract CipherRouterTest is Test {
 
     bytes32 internal constant GATE_CONTEXT = bytes32(uint256(3001));
     bytes32 internal constant PROPOSAL_CONTEXT = bytes32(uint256(3002));
+    bytes32 internal constant EXTERNAL_PROPOSAL_REF = bytes32(uint256(42));
+    bytes32 internal constant TALLY_COMMITMENT = bytes32(uint256(0xABCDEF));
 
     bytes32 internal constant ROOT_B = bytes32(uint256(0xB0B));
+    address internal constant DAO = address(0xDA0);
+    address internal constant TALLY_AUTHORITY = address(0xBEEF);
+    address internal constant UNAUTHORIZED = address(0xCAFE);
 
     AdapterRegistry internal adapterRegistry;
     VerifierRegistry internal verifierRegistry;
@@ -389,9 +409,8 @@ contract CipherRouterTest is Test {
 
         bytes32 actionId = router.submitAction(req);
 
-        VotingAdapter.VoteRecord memory voteRecord = votingAdapter.getVote(
-            actionId
-        );
+        ICipherVotingSource.VoteRecordView memory voteRecord = votingAdapter
+            .getVote(actionId);
         assertEq(voteRecord.proposalId, PROPOSAL_CONTEXT);
         assertEq(voteRecord.root, root);
         assertEq(voteRecord.nullifier, req.nullifier);
@@ -400,6 +419,143 @@ contract CipherRouterTest is Test {
         assertEq(voteRecord.encryptedPayload, inlineEncryptedVote);
         assertEq(voteRecord.submitter, address(this));
         assertEq(votingAdapter.voteCountByProposal(PROPOSAL_CONTEXT), 1);
+    }
+
+    function testVoting_CanLinkDaoContextAndDeriveContextId() public {
+        bytes32 derivedContextId = votingAdapter.computeContextId(
+            DAO,
+            EXTERNAL_PROPOSAL_REF
+        );
+
+        vm.expectEmit(address(votingAdapter));
+        emit ContextLinked(derivedContextId, DAO, EXTERNAL_PROPOSAL_REF);
+
+        votingAdapter.linkContext(derivedContextId, DAO, EXTERNAL_PROPOSAL_REF);
+
+        ICipherVotingSource.ContextLink memory link = votingAdapter
+            .getContextLink(derivedContextId);
+        assertEq(link.dao, DAO);
+        assertEq(link.externalReference, EXTERNAL_PROPOSAL_REF);
+        assertTrue(link.linked);
+    }
+
+    function testVoting_TallyAuthorityCanSubmitFinalizedTally() public {
+        vm.warp(2 days);
+
+        votingAdapter.configureProposal(
+            PROPOSAL_CONTEXT,
+            VotingAdapter.ProposalConfig({
+                enabled: true,
+                requirePayload: false,
+                requireEncryptedPayload: false,
+                startTime: uint64(block.timestamp - 2 days),
+                endTime: uint64(block.timestamp - 1 days)
+            })
+        );
+        votingAdapter.setTallyAuthority(TALLY_AUTHORITY);
+
+        vm.prank(TALLY_AUTHORITY);
+        vm.expectEmit(address(votingAdapter));
+        emit TallySubmitted(
+            PROPOSAL_CONTEXT,
+            7,
+            2,
+            1,
+            TALLY_COMMITMENT,
+            TALLY_AUTHORITY,
+            true
+        );
+        votingAdapter.submitTally(
+            PROPOSAL_CONTEXT,
+            7,
+            2,
+            1,
+            TALLY_COMMITMENT,
+            true
+        );
+
+        ICipherVotingSource.ProposalTally memory tally = votingAdapter
+            .getTally(PROPOSAL_CONTEXT);
+        assertEq(tally.forVotes, 7);
+        assertEq(tally.againstVotes, 2);
+        assertEq(tally.abstainVotes, 1);
+        assertEq(tally.tallyCommitment, TALLY_COMMITMENT);
+        assertEq(tally.submitter, TALLY_AUTHORITY);
+        assertTrue(tally.finalized);
+        assertTrue(votingAdapter.isTallyFinalized(PROPOSAL_CONTEXT));
+    }
+
+    function testVoting_TallyRejectsUnauthorizedOrPrematureSubmission() public {
+        votingAdapter.configureProposal(
+            PROPOSAL_CONTEXT,
+            VotingAdapter.ProposalConfig({
+                enabled: true,
+                requirePayload: false,
+                requireEncryptedPayload: false,
+                startTime: uint64(block.timestamp - 1),
+                endTime: uint64(block.timestamp + 1 days)
+            })
+        );
+        votingAdapter.setTallyAuthority(TALLY_AUTHORITY);
+
+        vm.prank(UNAUTHORIZED);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VotingAdapter.OnlyTallyAuthority.selector,
+                UNAUTHORIZED
+            )
+        );
+        votingAdapter.submitTally(PROPOSAL_CONTEXT, 1, 0, 0, bytes32(0), true);
+
+        vm.prank(TALLY_AUTHORITY);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VotingAdapter.TallySubmissionTooEarly.selector,
+                PROPOSAL_CONTEXT,
+                uint64(block.timestamp + 1 days),
+                uint64(block.timestamp)
+            )
+        );
+        votingAdapter.submitTally(PROPOSAL_CONTEXT, 1, 0, 0, bytes32(0), true);
+    }
+
+    function testVoting_FinalizedTallyCannotBeOverwritten() public {
+        vm.warp(2 days);
+
+        votingAdapter.configureProposal(
+            PROPOSAL_CONTEXT,
+            VotingAdapter.ProposalConfig({
+                enabled: true,
+                requirePayload: false,
+                requireEncryptedPayload: false,
+                startTime: uint64(block.timestamp - 2 days),
+                endTime: uint64(block.timestamp - 1 days)
+            })
+        );
+
+        votingAdapter.submitTally(
+            PROPOSAL_CONTEXT,
+            3,
+            1,
+            0,
+            TALLY_COMMITMENT,
+            true
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                VotingAdapter.TallyAlreadyFinalized.selector,
+                PROPOSAL_CONTEXT
+            )
+        );
+        votingAdapter.submitTally(
+            PROPOSAL_CONTEXT,
+            4,
+            1,
+            0,
+            bytes32(uint256(0x123)),
+            false
+        );
     }
 
     function testVoting_FailsWhenProposalValidationFails() public {

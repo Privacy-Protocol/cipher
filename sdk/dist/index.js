@@ -25,7 +25,7 @@ import {
   hash6,
   parseCipherLogs,
   resolveCipherConfig
-} from "./chunk-KM5B74LD.js";
+} from "./chunk-BTXVJWZR.js";
 export {
   BrowserCipherProofProvider,
   CIPHER_ACTION_TYPES,

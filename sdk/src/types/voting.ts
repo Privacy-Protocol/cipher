@@ -41,3 +41,19 @@ export interface VotingRecord {
   submitter: `0x${string}`;
   submittedAt: bigint;
 }
+
+export interface VotingProposalTally {
+  forVotes: bigint;
+  againstVotes: bigint;
+  abstainVotes: bigint;
+  tallyCommitment: Bytes32;
+  submitter: `0x${string}`;
+  submittedAt: bigint;
+  finalized: boolean;
+}
+
+export interface VotingContextLink {
+  dao: `0x${string}`;
+  externalReference: Bytes32;
+  linked: boolean;
+}

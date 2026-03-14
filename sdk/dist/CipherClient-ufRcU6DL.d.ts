@@ -259,6 +259,20 @@ interface VotingRecord {
     submitter: `0x${string}`;
     submittedAt: bigint;
 }
+interface VotingProposalTally {
+    forVotes: bigint;
+    againstVotes: bigint;
+    abstainVotes: bigint;
+    tallyCommitment: Bytes32;
+    submitter: `0x${string}`;
+    submittedAt: bigint;
+    finalized: boolean;
+}
+interface VotingContextLink {
+    dao: `0x${string}`;
+    externalReference: Bytes32;
+    linked: boolean;
+}
 
 declare class VotingModule {
     private readonly ctx;
@@ -281,6 +295,10 @@ declare class VotingModule {
         contextId: string | `0x${string}`;
     }): Promise<`0x${string}`>;
     getVote(actionId: string | `0x${string}`): Promise<VotingRecord>;
+    getTally(contextId: string | `0x${string}`): Promise<VotingProposalTally>;
+    isTallyFinalized(contextId: string | `0x${string}`): Promise<boolean>;
+    getContextLink(contextId: string | `0x${string}`): Promise<VotingContextLink>;
+    computeContextId(dao: `0x${string}`, externalReference: string | `0x${string}`): Promise<`0x${string}`>;
     getProposalState(contextId: string | `0x${string}`): Promise<{
         enabled: boolean;
         requirePayload: boolean;
@@ -340,4 +358,4 @@ declare class CipherClient {
     }): ParsedCipherLog[];
 }
 
-export { type Bytes32 as B, type CipherClientOptions as C, type EncryptedPayloadArtifact as E, type MembershipEncryptionInput as M, type ParsedCipherLog as P, type RouterActionSubmittedLog as R, type VotingEncryptionInput as V, CipherClient as a, type CipherResolvedConfig as b, type CipherProofProvider as c, type CipherEncryptionProvider as d, type CipherPayloadStorageProvider as e, type CipherProviders as f, type CipherProofBundle as g, type CipherActionRequest as h, type CipherClientContext as i, type CipherTxReceipt as j, type CipherWorkflow as k, type MembershipExecuteResult as l, type MembershipGrantedLog as m, type MembershipInput as n, type MembershipPayloadCommitmentInput as o, type MembershipPrepared as p, type MembershipProofInput as q, type MembershipWitness as r, type VotingExecuteResult as s, type VotingInput as t, type VotingPayloadCommitmentInput as u, type VotingPrepared as v, type VotingProofInput as w, type VotingRecord as x, type VotingStoredLog as y, parseCipherLogs as z };
+export { type VotingStoredLog as A, type Bytes32 as B, type CipherClientOptions as C, parseCipherLogs as D, type EncryptedPayloadArtifact as E, type MembershipEncryptionInput as M, type ParsedCipherLog as P, type RouterActionSubmittedLog as R, type VotingContextLink as V, CipherClient as a, type CipherResolvedConfig as b, type CipherProofProvider as c, type CipherEncryptionProvider as d, type CipherPayloadStorageProvider as e, type CipherProviders as f, type CipherProofBundle as g, type CipherActionRequest as h, type CipherClientContext as i, type CipherTxReceipt as j, type CipherWorkflow as k, type MembershipExecuteResult as l, type MembershipGrantedLog as m, type MembershipInput as n, type MembershipPayloadCommitmentInput as o, type MembershipPrepared as p, type MembershipProofInput as q, type MembershipWitness as r, type VotingEncryptionInput as s, type VotingExecuteResult as t, type VotingInput as u, type VotingPayloadCommitmentInput as v, type VotingPrepared as w, type VotingProofInput as x, type VotingProposalTally as y, type VotingRecord as z };

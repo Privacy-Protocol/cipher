@@ -259,6 +259,32 @@ var MEMBERSHIP_ADAPTER_ABI = [
 var VOTING_ADAPTER_ABI = [
   {
     type: "function",
+    name: "computeContextId",
+    stateMutability: "view",
+    inputs: [
+      { name: "dao", type: "address" },
+      { name: "externalReference", type: "bytes32" }
+    ],
+    outputs: [{ type: "bytes32" }]
+  },
+  {
+    type: "function",
+    name: "getContextLink",
+    stateMutability: "view",
+    inputs: [{ name: "contextId", type: "bytes32" }],
+    outputs: [
+      {
+        type: "tuple",
+        components: [
+          { name: "dao", type: "address" },
+          { name: "externalReference", type: "bytes32" },
+          { name: "linked", type: "bool" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
     name: "getVote",
     stateMutability: "view",
     inputs: [{ name: "actionId", type: "bytes32" }],
@@ -277,6 +303,33 @@ var VOTING_ADAPTER_ABI = [
         ]
       }
     ]
+  },
+  {
+    type: "function",
+    name: "getTally",
+    stateMutability: "view",
+    inputs: [{ name: "contextId", type: "bytes32" }],
+    outputs: [
+      {
+        type: "tuple",
+        components: [
+          { name: "forVotes", type: "uint256" },
+          { name: "againstVotes", type: "uint256" },
+          { name: "abstainVotes", type: "uint256" },
+          { name: "tallyCommitment", type: "bytes32" },
+          { name: "submitter", type: "address" },
+          { name: "submittedAt", type: "uint64" },
+          { name: "finalized", type: "bool" }
+        ]
+      }
+    ]
+  },
+  {
+    type: "function",
+    name: "isTallyFinalized",
+    stateMutability: "view",
+    inputs: [{ name: "contextId", type: "bytes32" }],
+    outputs: [{ type: "bool" }]
   },
   {
     type: "function",
@@ -1006,6 +1059,54 @@ var VotingModule = class {
       submitter: typed.submitter,
       submittedAt: typed.submittedAt
     };
+  }
+  async getTally(contextId) {
+    const result = await this.ctx.publicClient.readContract({
+      address: this.ctx.config.adapters.voting,
+      abi: VOTING_ADAPTER_ABI,
+      functionName: "getTally",
+      args: [asBytes32(contextId)]
+    });
+    const typed = result;
+    return {
+      forVotes: typed.forVotes,
+      againstVotes: typed.againstVotes,
+      abstainVotes: typed.abstainVotes,
+      tallyCommitment: typed.tallyCommitment,
+      submitter: typed.submitter,
+      submittedAt: typed.submittedAt,
+      finalized: typed.finalized
+    };
+  }
+  async isTallyFinalized(contextId) {
+    return this.ctx.publicClient.readContract({
+      address: this.ctx.config.adapters.voting,
+      abi: VOTING_ADAPTER_ABI,
+      functionName: "isTallyFinalized",
+      args: [asBytes32(contextId)]
+    });
+  }
+  async getContextLink(contextId) {
+    const result = await this.ctx.publicClient.readContract({
+      address: this.ctx.config.adapters.voting,
+      abi: VOTING_ADAPTER_ABI,
+      functionName: "getContextLink",
+      args: [asBytes32(contextId)]
+    });
+    const typed = result;
+    return {
+      dao: typed.dao,
+      externalReference: typed.externalReference,
+      linked: typed.linked
+    };
+  }
+  async computeContextId(dao, externalReference) {
+    return this.ctx.publicClient.readContract({
+      address: this.ctx.config.adapters.voting,
+      abi: VOTING_ADAPTER_ABI,
+      functionName: "computeContextId",
+      args: [dao, asBytes32(externalReference)]
+    });
   }
   async getProposalState(contextId) {
     const id = asBytes32(contextId);
