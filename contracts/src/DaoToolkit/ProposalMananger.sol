@@ -12,6 +12,8 @@ contract ProposalManager is IProposalManager {
     // RevealMode revealMode;           // final only or live aggregate
 
     mapping(uint => ProposalConfig) public proposals;
+    mapping(uint => mapping(address => bool)) public hasVoted;
+    mapping(uint => bytes[]) public encryptedVotes;
 
     function propose(
         uint _proposalId,
@@ -43,8 +45,10 @@ contract ProposalManager is IProposalManager {
         return proposals[_proposalId];
     }
 
-    //function to submit encrypted vote
-    function submitEncryptedVote(uint _proposalId, uint8 voteOption) external {
+    function submitEncryptedVote(
+        uint _proposalId,
+        bytes calldata _encryptedVote
+    ) external {
         if (!proposals[_proposalId].exists) {
             revert ProposalManager__ProposalNotExists();
         }
@@ -53,15 +57,17 @@ contract ProposalManager is IProposalManager {
             revert ProposalManager__VotingPeriodEnded();
         }
 
-        // TODO: adjust this later after MVP
-        uint8 voterWeight = 1;
-
-        proposals[_proposalId].voteCounts[voteOption] += voterWeight;
-
-        emit VoteSubmitted(_proposalId, voteOption);
-
-        // TODO: add logic to check if the voter has already voted
         // TODO: add logic to check if the voter is eligible to vote
+        // TODO: this logic to check if the voter has already voted should be ZK with nullifier??
+        if (hasVoted[_proposalId][msg.sender]) {
+            revert ProposalManager__UserAlreadyVoted();
+        }
+
+        // TODO: add voter weight. for now its all 1 per vote
+
+        encryptedVotes[_proposalId].push(_encryptedVote);
+
+        emit VoteSubmitted(_proposalId, _encryptedVote);
     }
 
     //function to count encrypted vote

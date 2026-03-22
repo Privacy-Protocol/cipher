@@ -11,7 +11,7 @@ interface IProposalManager {
         uint8 ballotSize,
         uint64 votingPeriod
     );
-    event VoteSubmitted(uint indexed proposalId, uint8 voteOption);
+    event VoteSubmitted(uint indexed proposalId, bytes encryptedVote);
     event VotesTallied(uint indexed proposalId, uint[] voteCounts);
 
     //////////////ERRORS///////////////////
@@ -20,6 +20,7 @@ interface IProposalManager {
     error ProposalManager__InvalidBallotSize();
     error ProposalManager__VotingPeriodEnded();
     error ProposalManager__ProposalNotExists();
+    error ProposalManager__UserAlreadyVoted();
 
     /// @notice Configuration of a proposal.
     /// @param ballotSize The number of available voting options (e.g., 2: Yes/No, 3: For/Against/Abstain).
@@ -56,8 +57,11 @@ interface IProposalManager {
 
     /// @notice Submits a vote (or an encrypted vote logic footprint) for a particular proposal.
     /// @param _proposalId The ID of the proposal being voted on.
-    /// @param voteOption The index of the selected vote option.
-    function submitEncryptedVote(uint _proposalId, uint8 voteOption) external;
+    /// @param _encryptedVote The encrypted vote.
+    function submitEncryptedVote(
+        uint _proposalId,
+        bytes calldata _encryptedVote
+    ) external;
 
     /// @notice Displays or calculates the final vote tally for a proposal.
     /// @param _proposalId The ID of the proposal.
