@@ -24,7 +24,6 @@ contract DemoDao is ReentrancyGuard {
     error DemoDao__InvalidQuorum();
     error DemoDao__AddressZero();
     error DemoDao__InsufficientTokenBalance();
-    error DemoDao__AlreadyVoted();
 
     // ============ Types ============
     enum ProposalStatus {
@@ -71,8 +70,6 @@ contract DemoDao is ReentrancyGuard {
     uint256 public s_proposalCount;
     mapping(uint256 => ProposalCore) public s_proposals;
     mapping(uint256 => bytes) public s_proposalData;
-    mapping(uint256 => mapping(address => bool)) public s_hasVoted;
-
     // ============ Modifiers ============
     modifier onlyMember() {
         _checkMember();
@@ -113,7 +110,10 @@ contract DemoDao is ReentrancyGuard {
 
     // ============ External Functions ============
 
-    function createProposal(address target, bytes calldata data, uint256 value) external returns (uint256 proposalId) {
+    function createProposal(address target, bytes calldata data, uint256 value, bytes32 membershipRoot)
+        external
+        returns (uint256 proposalId)
+    {
         if (GOVERNANCE_TOKEN.balanceOf(msg.sender) < MIN_TOKENS_TO_PROPOSE) {
             revert DemoDao__InsufficientTokenBalance();
         }
@@ -123,7 +123,7 @@ contract DemoDao is ReentrancyGuard {
 
         // Create the configuration on the ProposalManager.
         // We use a ballot size of 3 mapping to 0: against, 1: for, 2: abstain.
-        PROPOSAL_MANAGER.propose(proposalId, 3, uint64(VOTING_PERIOD), false);
+        PROPOSAL_MANAGER.propose(proposalId, 3, uint64(VOTING_PERIOD), false, membershipRoot);
 
         s_proposals[proposalId] = ProposalCore({
             proposer: msg.sender,
@@ -140,7 +140,10 @@ contract DemoDao is ReentrancyGuard {
         emit ProposalCreated(proposalId, msg.sender, target, block.timestamp, block.timestamp + VOTING_PERIOD);
     }
 
-    function vote(uint256 proposalId, bytes calldata voteData) external onlyMember proposalExists(proposalId) {
+    function vote(uint256 proposalId, bytes32 nullifierHash, bytes calldata zkProof, bytes calldata voteData)
+        external
+        proposalExists(proposalId)
+    {
         ProposalCore storage proposal = s_proposals[proposalId];
 
         if (proposal.status != ProposalStatus.Active) {
@@ -151,18 +154,13 @@ contract DemoDao is ReentrancyGuard {
             revert DemoDao__VotingPeriodEnded();
         }
 
-        if (s_hasVoted[proposalId][msg.sender]) {
-            revert DemoDao__AlreadyVoted();
-        }
-        s_hasVoted[proposalId][msg.sender] = true;
-
-        // Relay the footprint to ProposalManager, passing the actual voter address.
-        PROPOSAL_MANAGER.submitEncryptedVote(proposalId, msg.sender, voteData);
+        PROPOSAL_MANAGER.submitEncryptedVote(proposalId, nullifierHash, zkProof, voteData);
 
         // Note: voterWeight is conceptually 1 as handled initially in ProposalManager.
         uint256 voterWeight = 1;
+        voterWeight;
 
-        // emit VoteCast(proposalId, msg.sender, support, voterWeight);
+        // TODO: emit the decrypted vote choice once the encrypted vote payload is tied to a public support value.
     }
 
     function execute(uint256 proposalId) external nonReentrant proposalExists(proposalId) {
@@ -219,11 +217,7 @@ contract DemoDao is ReentrancyGuard {
         return s_proposalCount;
     }
 
-    function hasVoted(uint256 proposalId, address voter) external view returns (bool) {
-        return s_hasVoted[proposalId][voter];
-    }
-
-    function hasReachedQuorum(uint256 proposalId) public returns (bool) {
+    function hasReachedQuorum(uint256 proposalId) public view returns (bool) {
         // Since IProposalManager intentionally reverts if queried before voting ends,
         // this method can only be correctly utilized after the proposal's voting period has concluded.
         uint[] memory counts = PROPOSAL_MANAGER.getProposalById(proposalId).voteCounts;

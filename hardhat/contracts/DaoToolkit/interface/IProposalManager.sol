@@ -38,19 +38,23 @@ interface IProposalManager {
     error ProposalManager__InvalidBallotSize();
     error ProposalManager__VotingPeriodEnded();
     error ProposalManager__ProposalNotExists();
-    error ProposalManager__UserAlreadyVoted();
+    error ProposalManager__NullifierAlreadyUsed();
     error ProposalManager__VotingPeriodNotEnded();
+    error ProposalManager__InvalidMembershipRoot();
+    error ProposalManager__InvalidVoteProof();
 
     /// @notice Configuration of a proposal.
     /// @param ballotSize The number of available voting options (e.g., 2: Yes/No, 3: For/Against/Abstain).
     /// @param votingStart The timestamp when voting begins.
     /// @param votingEnd The timestamp when voting ends.
+    /// @param membershipRoot The fixed membership root used by the vote-verification circuit.
     /// @param exists True if the proposal has been initialized.
     /// @param voteCounts Array storing the total vote weights for each option.
     struct ProposalConfig {
         uint8 ballotSize;
         uint votingStart;
         uint votingEnd;
+        bytes32 membershipRoot;
         bool exists;
         bool allowLiveReveal;
         uint[] voteCounts;
@@ -66,19 +70,27 @@ interface IProposalManager {
     /// @param _proposalId The unique identifier for the new proposal.
     /// @param _ballotSize The number of options available to vote on.
     /// @param _votingPeriod The duration the voting will be open, in seconds.
+    /// @param _membershipRoot The DAO membership root used for vote proofs on this proposal.
     /// @return proposal The newly created ProposalConfig representing the initial state.
     function propose(
         uint _proposalId,
         uint8 _ballotSize,
         uint64 _votingPeriod,
-        bool _allowLiveReveal
+        bool _allowLiveReveal,
+        bytes32 _membershipRoot
     ) external returns (ProposalConfig memory proposal);
 
-    /// @notice Submits a vote (or an encrypted vote logic footprint) for a particular proposal.
+    /// @notice Submits an encrypted vote and a nullifier-backed membership proof for a particular proposal.
     /// @param _proposalId The ID of the proposal being voted on.
-    /// @param voter The address of the voter on whose behalf this vote is submitted.
+    /// @param _nullifierHash The proposal-scoped nullifier emitted by the vote-verification circuit.
+    /// @param _zkProof The serialized Noir proof bytes. The verifier integration is stubbed for now.
     /// @param voteData The ABI-encoded tuple of (bytes32 encryptedVote, bytes voteProof).
-    function submitEncryptedVote(uint _proposalId, address voter, bytes calldata voteData) external;
+    function submitEncryptedVote(
+        uint _proposalId,
+        bytes32 _nullifierHash,
+        bytes calldata _zkProof,
+        bytes calldata voteData
+    ) external;
 
     /// @notice Ends the voting period for a proposal, makes the encrypted tallies publicly decryptable, and reveals the results.
     /// @param _proposalId The ID of the proposal to end voting on.

@@ -25,6 +25,8 @@ const MIN_TOKENS_TO_PROPOSE = ethers.parseEther("100");
 const MIN_TOKENS_TO_VOTE = ethers.parseEther("10");
 const VOTING_PERIOD = 86400; // 1 day
 const QUORUM_PERCENTAGE = 100; // out of 10_000
+const DEFAULT_MEMBERSHIP_ROOT = ethers.keccak256(ethers.toUtf8Bytes("demo-membership-root"));
+const DEFAULT_ZK_PROOF = "0x1234";
 
 /**
  * Deploy ProposalManager, MockERC20, and DemoDao.
@@ -81,6 +83,12 @@ async function encryptVote(
   return ethers.AbiCoder.defaultAbiCoder().encode(
     ["bytes32", "bytes"],
     [encrypted.handles[0], encrypted.inputProof],
+  );
+}
+
+function buildNullifier(proposalId: number, signer: HardhatEthersSigner): string {
+  return ethers.keccak256(
+    ethers.solidityPacked(["uint256", "address"], [proposalId, signer.address]),
   );
 }
 
@@ -170,7 +178,9 @@ describe("DemoDao", function () {
       const data = "0x";
       const value = 0;
 
-      const tx = await dao.connect(signers.alice).createProposal(target, data, value);
+      const tx = await dao
+        .connect(signers.alice)
+        .createProposal(target, data, value, DEFAULT_MEMBERSHIP_ROOT);
       await tx.wait();
 
       expect(await dao.getProposalCount()).to.eq(1);
@@ -178,13 +188,17 @@ describe("DemoDao", function () {
 
     it("should emit ProposalCreated event", async function () {
       const target = signers.bob.address;
-      await expect(dao.connect(signers.alice).createProposal(target, "0x", 0))
+      await expect(
+        dao.connect(signers.alice).createProposal(target, "0x", 0, DEFAULT_MEMBERSHIP_ROOT),
+      )
         .to.emit(dao, "ProposalCreated");
     });
 
     it("should store correct proposal data", async function () {
       const target = signers.bob.address;
-      await dao.connect(signers.alice).createProposal(target, "0x1234", 100);
+      await dao
+        .connect(signers.alice)
+        .createProposal(target, "0x1234", 100, DEFAULT_MEMBERSHIP_ROOT);
 
       const [proposer, storedTarget, storedValue, startTime, endTime, status, executed] =
         await dao.s_proposals(1);
@@ -198,24 +212,31 @@ describe("DemoDao", function () {
     });
 
     it("should also create proposal on ProposalManager", async function () {
-      await dao.connect(signers.alice).createProposal(signers.bob.address, "0x", 0);
+      await dao
+        .connect(signers.alice)
+        .createProposal(signers.bob.address, "0x", 0, DEFAULT_MEMBERSHIP_ROOT);
 
       // proposalId 1 should exist on ProposalManager with ballotSize = 3
       const pmProposal = await proposalManager.getProposalById(1);
       expect(pmProposal.exists).to.be.true;
       expect(pmProposal.ballotSize).to.eq(3);
+      expect(pmProposal.membershipRoot).to.eq(DEFAULT_MEMBERSHIP_ROOT);
     });
 
     it("should revert if caller has insufficient tokens to propose", async function () {
       // charlie has 50 tokens, needs 100 to propose
       await expect(
-        dao.connect(signers.charlie).createProposal(signers.alice.address, "0x", 0),
+        dao
+          .connect(signers.charlie)
+          .createProposal(signers.alice.address, "0x", 0, DEFAULT_MEMBERSHIP_ROOT),
       ).to.be.revertedWithCustomError(dao, "DemoDao__InsufficientTokenBalance");
     });
 
     it("should revert if caller has zero tokens", async function () {
       await expect(
-        dao.connect(signers.nonMember).createProposal(signers.alice.address, "0x", 0),
+        dao
+          .connect(signers.nonMember)
+          .createProposal(signers.alice.address, "0x", 0, DEFAULT_MEMBERSHIP_ROOT),
       ).to.be.revertedWithCustomError(dao, "DemoDao__InsufficientTokenBalance");
     });
   });
@@ -225,48 +246,57 @@ describe("DemoDao", function () {
   describe("vote", function () {
     beforeEach(async function () {
       // Alice creates a proposal
-      await dao.connect(signers.alice).createProposal(signers.bob.address, "0x", 0);
+      await dao
+        .connect(signers.alice)
+        .createProposal(signers.bob.address, "0x", 0, DEFAULT_MEMBERSHIP_ROOT);
     });
 
     it("should allow a member to vote on a proposal", async function () {
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      const tx = await dao.connect(signers.alice).vote(1, voteData);
+      const tx = await dao
+        .connect(signers.alice)
+        .vote(1, buildNullifier(1, signers.alice), DEFAULT_ZK_PROOF, voteData);
       await tx.wait();
 
-      expect(await dao.hasVoted(1, signers.alice.address)).to.be.true;
+      expect(await proposalManager.nullifierUsed(1, buildNullifier(1, signers.alice))).to.be.true;
     });
 
     it("should relay the encrypted vote to ProposalManager", async function () {
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      await dao.connect(signers.bob).vote(1, voteData);
+      await dao.connect(signers.bob).vote(1, buildNullifier(1, signers.bob), DEFAULT_ZK_PROOF, voteData);
 
-      // Verify: ProposalManager should have marked the voter (bob) as voted
-      expect(await proposalManager.hasVoted(1, signers.bob.address)).to.be.true;
+      expect(await proposalManager.nullifierUsed(1, buildNullifier(1, signers.bob))).to.be.true;
     });
 
     it("should allow multiple members to vote on the same proposal", async function () {
       const voteDataAlice = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      await dao.connect(signers.alice).vote(1, voteDataAlice);
+      await dao
+        .connect(signers.alice)
+        .vote(1, buildNullifier(1, signers.alice), DEFAULT_ZK_PROOF, voteDataAlice);
 
       const voteDataBob = await encryptVote(proposalManagerAddress, daoAddress, 0);
-      await dao.connect(signers.bob).vote(1, voteDataBob);
+      await dao.connect(signers.bob).vote(1, buildNullifier(1, signers.bob), DEFAULT_ZK_PROOF, voteDataBob);
 
-      expect(await dao.hasVoted(1, signers.alice.address)).to.be.true;
-      expect(await dao.hasVoted(1, signers.bob.address)).to.be.true;
+      expect(await proposalManager.nullifierUsed(1, buildNullifier(1, signers.alice))).to.be.true;
+      expect(await proposalManager.nullifierUsed(1, buildNullifier(1, signers.bob))).to.be.true;
     });
 
     it("should produce correct encrypted tallies after votes", async function () {
       // Alice votes For (option 1)
       const voteDataAlice = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      await dao.connect(signers.alice).vote(1, voteDataAlice);
+      await dao
+        .connect(signers.alice)
+        .vote(1, buildNullifier(1, signers.alice), DEFAULT_ZK_PROOF, voteDataAlice);
 
       // Bob votes For (option 1)
       const voteDataBob = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      await dao.connect(signers.bob).vote(1, voteDataBob);
+      await dao.connect(signers.bob).vote(1, buildNullifier(1, signers.bob), DEFAULT_ZK_PROOF, voteDataBob);
 
       // Charlie votes Against (option 0)
       const voteDataCharlie = await encryptVote(proposalManagerAddress, daoAddress, 0);
-      await dao.connect(signers.charlie).vote(1, voteDataCharlie);
+      await dao
+        .connect(signers.charlie)
+        .vote(1, buildNullifier(1, signers.charlie), DEFAULT_ZK_PROOF, voteDataCharlie);
 
       // Verify tallies via debugger
       const clearTally0 = await fhevm.debugger.decryptEuint(
@@ -287,27 +317,30 @@ describe("DemoDao", function () {
       expect(clearTally2).to.eq(0n); // 0 Abstain
     });
 
-    it("should revert if non-member tries to vote", async function () {
+    it("should allow any caller to relay a vote while verification is stubbed", async function () {
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
       await expect(
-        dao.connect(signers.nonMember).vote(1, voteData),
-      ).to.be.revertedWithCustomError(dao, "DemoDao__NotAMember");
+        dao
+          .connect(signers.nonMember)
+          .vote(1, buildNullifier(1, signers.nonMember), DEFAULT_ZK_PROOF, voteData),
+      ).to.not.be.reverted;
     });
 
-    it("should revert if member votes twice", async function () {
+    it("should revert if the same nullifier is reused", async function () {
       const voteData1 = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      await dao.connect(signers.alice).vote(1, voteData1);
+      const nullifierHash = buildNullifier(1, signers.alice);
+      await dao.connect(signers.alice).vote(1, nullifierHash, DEFAULT_ZK_PROOF, voteData1);
 
       const voteData2 = await encryptVote(proposalManagerAddress, daoAddress, 0);
       await expect(
-        dao.connect(signers.alice).vote(1, voteData2),
-      ).to.be.revertedWithCustomError(dao, "DemoDao__AlreadyVoted");
+        dao.connect(signers.alice).vote(1, nullifierHash, DEFAULT_ZK_PROOF, voteData2),
+      ).to.be.revertedWithCustomError(proposalManager, "ProposalManager__NullifierAlreadyUsed");
     });
 
     it("should revert if proposal does not exist", async function () {
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
       await expect(
-        dao.connect(signers.alice).vote(999, voteData),
+        dao.connect(signers.alice).vote(999, buildNullifier(999, signers.alice), DEFAULT_ZK_PROOF, voteData),
       ).to.be.revertedWithCustomError(dao, "DemoDao__ProposalDoesNotExist");
     });
 
@@ -316,7 +349,7 @@ describe("DemoDao", function () {
 
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
       await expect(
-        dao.connect(signers.alice).vote(1, voteData),
+        dao.connect(signers.alice).vote(1, buildNullifier(1, signers.alice), DEFAULT_ZK_PROOF, voteData),
       ).to.be.revertedWithCustomError(dao, "DemoDao__VotingPeriodEnded");
     });
   });
@@ -325,7 +358,9 @@ describe("DemoDao", function () {
 
   describe("closeProposal", function () {
     beforeEach(async function () {
-      await dao.connect(signers.alice).createProposal(signers.bob.address, "0x", 0);
+      await dao
+        .connect(signers.alice)
+        .createProposal(signers.bob.address, "0x", 0, DEFAULT_MEMBERSHIP_ROOT);
     });
 
     it("should revert if voting period has not ended", async function () {
@@ -349,16 +384,15 @@ describe("DemoDao", function () {
       expect(await dao.isMember(signers.nonMember.address)).to.be.false;
     });
 
-    it("hasVoted should return false before voting", async function () {
-      await dao.connect(signers.alice).createProposal(signers.bob.address, "0x", 0);
-      expect(await dao.hasVoted(1, signers.alice.address)).to.be.false;
-    });
-
     it("getProposalCount should track proposal count", async function () {
       expect(await dao.getProposalCount()).to.eq(0);
-      await dao.connect(signers.alice).createProposal(signers.bob.address, "0x", 0);
+      await dao
+        .connect(signers.alice)
+        .createProposal(signers.bob.address, "0x", 0, DEFAULT_MEMBERSHIP_ROOT);
       expect(await dao.getProposalCount()).to.eq(1);
-      await dao.connect(signers.bob).createProposal(signers.alice.address, "0x", 0);
+      await dao
+        .connect(signers.bob)
+        .createProposal(signers.alice.address, "0x", 0, DEFAULT_MEMBERSHIP_ROOT);
       expect(await dao.getProposalCount()).to.eq(2);
     });
   });
