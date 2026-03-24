@@ -5,8 +5,8 @@ import {
   DemoDao__factory,
   HonkVerifier,
   HonkVerifier__factory,
-  ProposalManager,
-  ProposalManager__factory,
+  PrivateDaoAdapter,
+  PrivateDaoAdapter__factory,
   MockERC20,
   MockERC20__factory,
 } from "../types";
@@ -55,15 +55,15 @@ async function deployVoteSubmissionVerifier() {
 }
 
 /**
- * Deploy ProposalManager, MockERC20, and DemoDao.
+ * Deploy PrivateDaoAdapter, MockERC20, and DemoDao.
  * Mints governance tokens to alice, bob, charlie so they qualify as members.
  */
 async function deployFixture(signers: Signers) {
   const { voteSubmissionVerifierAddress } = await deployVoteSubmissionVerifier();
 
-  // Deploy ProposalManager
-  const pmFactory = (await ethers.getContractFactory("ProposalManager")) as ProposalManager__factory;
-  const proposalManager = (await pmFactory.deploy(voteSubmissionVerifierAddress)) as ProposalManager;
+  // Deploy PrivateDaoAdapter
+  const pmFactory = (await ethers.getContractFactory("PrivateDaoAdapter")) as PrivateDaoAdapter__factory;
+  const proposalManager = (await pmFactory.deploy(voteSubmissionVerifierAddress)) as PrivateDaoAdapter;
   const proposalManagerAddress = await proposalManager.getAddress();
 
   // Deploy MockERC20
@@ -94,9 +94,9 @@ async function deployFixture(signers: Signers) {
 
 /**
  * Helper: encrypts a uint8 vote and ABI-encodes it as (bytes32, bytes) voteData.
- * NOTE: The encrypted input must be created against ProposalManager (the contract
+ * NOTE: The encrypted input must be created against PrivateDaoAdapter (the contract
  * where FHE.fromExternal is called), with DemoDao as the signer address (msg.sender
- * inside ProposalManager.submitEncryptedVote is the DemoDao contract address).
+ * inside PrivateDaoAdapter.submitEncryptedVote is the DemoDao contract address).
  */
 async function encryptVote(
   contractAddress: string,
@@ -122,7 +122,7 @@ function buildNullifier(proposalId: number, signer: HardhatEthersSigner): string
 
 describe("DemoDao", function () {
   let signers: Signers;
-  let proposalManager: ProposalManager;
+  let proposalManager: PrivateDaoAdapter;
   let proposalManagerAddress: string;
   let token: MockERC20;
   let dao: DemoDao;
@@ -388,7 +388,7 @@ describe("DemoDao", function () {
       const voteData2 = await encryptVote(proposalManagerAddress, daoAddress, 0);
       await expect(
         dao.connect(signers.alice).vote(1, voteProof.nullifierHash, voteProof.proof, voteData2),
-      ).to.be.revertedWithCustomError(proposalManager, "ProposalManager__NullifierAlreadyUsed");
+      ).to.be.revertedWithCustomError(proposalManager, "PDA__NullifierAlreadyUsed");
     });
 
     it("should revert if proposal does not exist", async function () {

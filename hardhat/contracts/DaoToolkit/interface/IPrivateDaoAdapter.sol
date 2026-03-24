@@ -3,48 +3,48 @@ pragma solidity ^0.8.24;
 
 import {euint8, euint64} from "@fhevm/solidity/lib/FHE.sol";
 
-/// @title IProposalManager
+/// @title IPrivateDaoAdapter
 /// @author Obaloluwa
 /// @notice Interface for the ProposalManager contract.
-interface IProposalManager {
+interface IPrivateDaoAdapter {
     //////////////EVENTS///////////////////
     /// @notice Emitted when a new proposal is created.
     /// @param proposalId The ID of the newly created proposal.
     /// @param ballotSize The number of available voting options.
     /// @param votingPeriod The duration the voting will be open, in seconds.
-    event ProposalCreated(uint256 indexed proposalId, uint8 ballotSize, uint64 votingPeriod);
+    event PDA__ProposalCreated(uint256 indexed proposalId, uint8 ballotSize, uint64 votingPeriod);
 
     /// @notice Emitted when a user submits an encrypted vote for a proposal.
     /// @param proposalId The ID of the proposal being voted on.
-    event VoteSubmitted(uint256 indexed proposalId);
+    event PDA__VoteSubmitted(uint256 indexed proposalId);
 
     /// @notice Emitted when the voting period for a proposal ends.
     /// @param proposalId The ID of the proposal.
-    event VotingEnded(uint256 indexed proposalId);
+    event PDA__VotingEnded(uint256 indexed proposalId);
 
     /// @notice Emitted when the results of a live proposal are revealed.
     /// @param proposalId The ID of the proposal.
     /// @param decryptedTallies The decrypted results of the voting.
-    event AggregateResultsRevealed(uint256 indexed proposalId, uint64[] indexed decryptedTallies);
+    event PDA__AggregateResultsRevealed(uint256 indexed proposalId, uint64[] indexed decryptedTallies);
 
     /// @notice Emitted when the results of a closed proposal are revealed.
     /// @param proposalId The ID of the proposal.
     /// @param revealedTallies The decrypted results of the voting.
-    event FinalResultsRevealed(uint256 indexed proposalId, uint64[] indexed revealedTallies);
+    event PDA__FinalResultsRevealed(uint256 indexed proposalId, uint64[] indexed revealedTallies);
 
     //////////////ERRORS///////////////////
-    error ProposalManager__ProposalAlreadyExists();
-    error ProposalManager__InvalidVotingPeriod();
-    error ProposalManager__InvalidBallotSize();
-    error ProposalManager__VotingPeriodEnded();
-    error ProposalManager__ProposalNotExists();
-    error ProposalManager__NullifierAlreadyUsed();
-    error ProposalManager__VotingPeriodNotEnded();
-    error ProposalManager__InvalidMembershipRoot();
-    error ProposalManager__InvalidVoteProof();
-    error ProposalManager__InvalidDecryptedTalliesLength();
-    error ProposalManager__VotingPeriodNotStarted();
-    error ProposalManager__VotingAlreadyEnded();
+    error PDA__ProposalAlreadyExists();
+    error PDA__InvalidVotingPeriod();
+    error PDA__InvalidBallotSize();
+    error PDA__VotingPeriodEnded();
+    error PDA__ProposalNotExists();
+    error PDA__NullifierAlreadyUsed();
+    error PDA__VotingPeriodNotEnded();
+    error PDA__InvalidMembershipRoot();
+    error PDA__InvalidVoteProof();
+    error PDA__InvalidDecryptedTalliesLength();
+    error PDA__VotingPeriodNotStarted();
+    error PDA__VotingAlreadyEnded();
 
     /// @notice Configuration of a proposal.
     /// @param ballotSize The number of available voting options (e.g., 2: Yes/No, 3: For/Against/Abstain).
@@ -95,7 +95,7 @@ interface IProposalManager {
         bytes calldata voteData
     ) external;
 
-    /// @notice Ends the voting period for a proposal, makes the encrypted tallies publicly decryptable, and reveals the results.
+    /// @notice Ends the voting period for a proposal, makes the encrypted tallies publicly decryptable.
     /// @param _proposalId The ID of the proposal to end voting on.
     /// @param abiEncodedResults The KMS plaintexts encoded results.
     /// @param decryptionProof The KMS decryption proof.
@@ -106,9 +106,11 @@ interface IProposalManager {
     /// @param abiEncodedResults The KMS plaintexts encoded results.
     /// @param decryptionProof The KMS decryption proof.
     /// @return decryptedTallies The decrypted tallies for the proposal.
-    function revealAggregateTallies(uint256 _proposalId, bytes memory abiEncodedResults, bytes memory decryptionProof)
-        external
-        returns (uint64[] memory decryptedTallies);
+    function revealAggregateTallies(
+        uint256 _proposalId,
+        bytes memory abiEncodedResults,
+        bytes memory decryptionProof
+    ) external returns (uint64[] memory decryptedTallies);
 
     /// @notice Retrieves the latest revealed tallies for a proposal.
     /// @param _proposalId The ID of the proposal to query.

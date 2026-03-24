@@ -3,7 +3,7 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {IProposalManager} from "../../DaoToolkit/interface/IProposalManager.sol";
+import {IPrivateDaoAdapter} from "../../DaoToolkit/interface/IPrivateDaoAdapter.sol";
 
 /**
  * @title DemoDao
@@ -60,7 +60,7 @@ contract DemoDao is ReentrancyGuard {
 
     // ============ State Variables ============
     IERC20 public immutable GOVERNANCE_TOKEN;
-    IProposalManager public immutable PROPOSAL_MANAGER;
+    IPrivateDaoAdapter public immutable PROPOSAL_MANAGER;
 
     uint256 public immutable MIN_TOKENS_TO_PROPOSE;
     uint256 public immutable MIN_TOKENS_TO_VOTE;
@@ -101,7 +101,7 @@ contract DemoDao is ReentrancyGuard {
         }
 
         GOVERNANCE_TOKEN = IERC20(_governanceToken);
-        PROPOSAL_MANAGER = IProposalManager(_proposalManager);
+        PROPOSAL_MANAGER = IPrivateDaoAdapter(_proposalManager);
         MIN_TOKENS_TO_PROPOSE = _minTokensToPropose;
         MIN_TOKENS_TO_VOTE = _minTokensToVote;
         VOTING_PERIOD = _votingPeriod;
@@ -110,10 +110,12 @@ contract DemoDao is ReentrancyGuard {
 
     // ============ External Functions ============
 
-    function createProposal(address target, bytes calldata data, uint256 value, bytes32 membershipRoot)
-        external
-        returns (uint256 proposalId)
-    {
+    function createProposal(
+        address target,
+        bytes calldata data,
+        uint256 value,
+        bytes32 membershipRoot
+    ) external returns (uint256 proposalId) {
         if (GOVERNANCE_TOKEN.balanceOf(msg.sender) < MIN_TOKENS_TO_PROPOSE) {
             revert DemoDao__InsufficientTokenBalance();
         }
@@ -140,10 +142,12 @@ contract DemoDao is ReentrancyGuard {
         emit ProposalCreated(proposalId, msg.sender, target, block.timestamp, block.timestamp + VOTING_PERIOD);
     }
 
-    function vote(uint256 proposalId, bytes32 nullifierHash, bytes calldata zkProof, bytes calldata voteData)
-        external
-        proposalExists(proposalId)
-    {
+    function vote(
+        uint256 proposalId,
+        bytes32 nullifierHash,
+        bytes calldata zkProof,
+        bytes calldata voteData
+    ) external proposalExists(proposalId) {
         ProposalCore storage proposal = s_proposals[proposalId];
 
         if (proposal.status != ProposalStatus.Active) {

@@ -1,6 +1,6 @@
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { ethers, fhevm } from "hardhat";
-import { HonkVerifier, HonkVerifier__factory, ProposalManager, ProposalManager__factory } from "../types";
+import { HonkVerifier, HonkVerifier__factory, PrivateDaoAdapter, PrivateDaoAdapter__factory } from "../types";
 import { expect } from "chai";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
@@ -42,8 +42,8 @@ async function deployVoteSubmissionVerifier() {
 async function deployFixture() {
   const { voteSubmissionVerifier, voteSubmissionVerifierAddress } = await deployVoteSubmissionVerifier();
 
-  const factory = (await ethers.getContractFactory("ProposalManager")) as ProposalManager__factory;
-  const proposalManagerContract = (await factory.deploy(voteSubmissionVerifierAddress)) as ProposalManager;
+  const factory = (await ethers.getContractFactory("PrivateDaoAdapter")) as PrivateDaoAdapter__factory;
+  const proposalManagerContract = (await factory.deploy(voteSubmissionVerifierAddress)) as PrivateDaoAdapter;
   const proposalManagerAddress = await proposalManagerContract.getAddress();
 
   return { proposalManagerContract, proposalManagerAddress, voteSubmissionVerifier, voteSubmissionVerifierAddress };
@@ -76,7 +76,7 @@ function buildNullifier(proposalId: number, signer: HardhatEthersSigner): string
 
 describe("ProposalManager", function () {
   let signers: Signers;
-  let proposalManagerContract: ProposalManager;
+  let proposalManagerContract: PrivateDaoAdapter;
   let proposalManagerAddress: string;
   let realMembershipRoot: string;
 
@@ -133,7 +133,7 @@ describe("ProposalManager", function () {
         proposalManagerContract.propose(1, 2, 86400, false, DEFAULT_MEMBERSHIP_ROOT)
       ).to.be.revertedWithCustomError(
         proposalManagerContract,
-        "ProposalManager__ProposalAlreadyExists"
+        "PDA__ProposalAlreadyExists"
       );
     });
 
@@ -142,7 +142,7 @@ describe("ProposalManager", function () {
         proposalManagerContract.propose(1, 0, 86400, false, DEFAULT_MEMBERSHIP_ROOT)
       ).to.be.revertedWithCustomError(
         proposalManagerContract,
-        "ProposalManager__InvalidBallotSize"
+        "PDA__InvalidBallotSize"
       );
     });
 
@@ -151,7 +151,7 @@ describe("ProposalManager", function () {
         proposalManagerContract.propose(1, 17, 86400, false, DEFAULT_MEMBERSHIP_ROOT)
       ).to.be.revertedWithCustomError(
         proposalManagerContract,
-        "ProposalManager__InvalidBallotSize"
+        "PDA__InvalidBallotSize"
       );
     });
 
@@ -160,21 +160,21 @@ describe("ProposalManager", function () {
         proposalManagerContract.propose(1, 3, 0, false, DEFAULT_MEMBERSHIP_ROOT)
       ).to.be.revertedWithCustomError(
         proposalManagerContract,
-        "ProposalManager__InvalidVotingPeriod"
+        "PDA__InvalidVotingPeriod"
       );
     });
 
     it("should revert if membershipRoot is zero", async function () {
       await expect(
         proposalManagerContract.propose(1, 3, 86400, false, ethers.ZeroHash)
-      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__InvalidMembershipRoot");
+      ).to.be.revertedWithCustomError(proposalManagerContract, "PDA__InvalidMembershipRoot");
     });
 
     it("should emit ProposalCreated event", async function () {
       await expect(
         proposalManagerContract.propose(1, 3, 86400, false, DEFAULT_MEMBERSHIP_ROOT)
       )
-        .to.emit(proposalManagerContract, "ProposalCreated")
+        .to.emit(proposalManagerContract, "PDA__ProposalCreated")
         .withArgs(1, 3, 86400);
     });
   });
@@ -225,7 +225,7 @@ describe("ProposalManager", function () {
         proposalManagerContract
           .connect(signers.alice)
           .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData)
-      ).to.emit(proposalManagerContract, "VoteSubmitted").withArgs(proposalId);
+      ).to.emit(proposalManagerContract, "PDA__VoteSubmitted").withArgs(proposalId);
     });
 
     it("should mark the nullifier as used", async function () {
@@ -250,7 +250,7 @@ describe("ProposalManager", function () {
         proposalManagerContract
           .connect(signers.alice)
           .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData2)
-      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__NullifierAlreadyUsed");
+      ).to.be.revertedWithCustomError(proposalManagerContract, "PDA__NullifierAlreadyUsed");
     });
 
     it("should revert if the ZK proof payload is empty", async function () {
@@ -271,7 +271,7 @@ describe("ProposalManager", function () {
         proposalManagerContract
           .connect(signers.alice)
           .submitEncryptedVote(999, voteProof.nullifierHash, voteProof.proof, voteData)
-      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__ProposalNotExists");
+      ).to.be.revertedWithCustomError(proposalManagerContract, "PDA__ProposalNotExists");
     });
 
     it("should revert if voting period has ended", async function () {
@@ -283,7 +283,7 @@ describe("ProposalManager", function () {
         proposalManagerContract
           .connect(signers.alice)
           .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData)
-      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__VotingPeriodEnded");
+      ).to.be.revertedWithCustomError(proposalManagerContract, "PDA__VotingPeriodEnded");
     });
   });
 
@@ -308,14 +308,14 @@ describe("ProposalManager", function () {
     it("should revert if voting period has not ended", async function () {
       await expect(
         proposalManagerContract.endVoting(proposalId, encoded, "0x")
-      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__VotingPeriodNotEnded");
+      ).to.be.revertedWithCustomError(proposalManagerContract, "PDA__VotingPeriodNotEnded");
     });
 
     it("should revert if proposal does not exist", async function () {
       await time.increase(votingPeriod + 1);
       await expect(
         proposalManagerContract.endVoting(999, encoded, "0x")
-      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__ProposalNotExists");
+      ).to.be.revertedWithCustomError(proposalManagerContract, "PDA__ProposalNotExists");
     });
 
     it("should revert if the decryption proof payload is empty after voting ends", async function () {
@@ -447,7 +447,7 @@ describe("ProposalManager", function () {
     it("should revert if proposal does not exist", async function () {
       await expect(proposalManagerContract.getProposalById(999)).to.be.revertedWithCustomError(
         proposalManagerContract,
-        "ProposalManager__ProposalNotExists"
+        "PDA__ProposalNotExists"
       );
     });
 
