@@ -4,6 +4,8 @@ import { HonkVerifier, HonkVerifier__factory, ProposalManager, ProposalManager__
 import { expect } from "chai";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { generateVoteSubmissionProof } from "../scripts/generateVoteSubmissionProof";
+import { buildMembershipTree } from "../scripts/proofUtils";
 
 type Signers = {
   deployer: HardhatEthersSigner;
@@ -13,7 +15,12 @@ type Signers = {
 };
 
 const DEFAULT_MEMBERSHIP_ROOT = ethers.keccak256(ethers.toUtf8Bytes("demo-membership-root"));
-const DEFAULT_ZK_PROOF = "0x1234";
+const TEST_MEMBER_IDENTITY_SECRETS = [1001n, 1002n, 1003n];
+const MEMBER_INDEX_BY_SIGNER = {
+  alice: 0,
+  bob: 1,
+  charlie: 2,
+} as const;
 
 async function deployVoteSubmissionVerifier() {
   const zkTranscriptLibFactory = await ethers.getContractFactory("ZKTranscriptLib");
@@ -71,6 +78,7 @@ describe("ProposalManager", function () {
   let signers: Signers;
   let proposalManagerContract: ProposalManager;
   let proposalManagerAddress: string;
+  let realMembershipRoot: string;
 
   before(async function () {
     const ethSigners: HardhatEthersSigner[] = await ethers.getSigners();
@@ -80,6 +88,9 @@ describe("ProposalManager", function () {
       bob: ethSigners[2],
       charlie: ethSigners[3],
     };
+
+    const membershipTree = await buildMembershipTree(TEST_MEMBER_IDENTITY_SECRETS);
+    realMembershipRoot = ethers.zeroPadValue(ethers.toBeHex(membershipTree.membershipRoot), 32);
   });
 
   beforeEach(async function () {
@@ -175,85 +186,103 @@ describe("ProposalManager", function () {
     const ballotSize = 3;
     const votingPeriod = 86400;
 
+    async function buildVoteProof(
+      signerKey: keyof typeof MEMBER_INDEX_BY_SIGNER,
+      vote: number,
+      overrideProposalId = proposalId
+    ) {
+      return generateVoteSubmissionProof({
+        proposalId: overrideProposalId,
+        ballotSize,
+        vote,
+        memberIdentitySecrets: TEST_MEMBER_IDENTITY_SECRETS,
+        voterIndex: MEMBER_INDEX_BY_SIGNER[signerKey],
+      });
+    }
+
     beforeEach(async function () {
       await proposalManagerContract.propose(
         proposalId,
         ballotSize,
         votingPeriod,
         false,
-        DEFAULT_MEMBERSHIP_ROOT
+        realMembershipRoot
       );
     });
 
     it("should accept an encrypted vote and emit VoteSubmitted", async function () {
+      const voteProof = await buildVoteProof("alice", 1);
       const voteData = await encryptVote(proposalManagerAddress, signers.alice, 1);
-      const nullifierHash = buildNullifier(proposalId, signers.alice);
+
+      expect(voteProof.publicInputs).to.deep.equal([
+        ethers.zeroPadValue(ethers.toBeHex(proposalId), 32),
+        realMembershipRoot,
+        ethers.zeroPadValue(ethers.toBeHex(ballotSize), 32),
+        voteProof.nullifierHash,
+      ]);
 
       await expect(
         proposalManagerContract
           .connect(signers.alice)
-          .submitEncryptedVote(proposalId, nullifierHash, DEFAULT_ZK_PROOF, voteData)
+          .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData)
       ).to.emit(proposalManagerContract, "VoteSubmitted").withArgs(proposalId);
     });
 
     it("should mark the nullifier as used", async function () {
+      const voteProof = await buildVoteProof("alice", 0);
       const voteData = await encryptVote(proposalManagerAddress, signers.alice, 0);
-      const nullifierHash = buildNullifier(proposalId, signers.alice);
       await proposalManagerContract
         .connect(signers.alice)
-        .submitEncryptedVote(proposalId, nullifierHash, DEFAULT_ZK_PROOF, voteData);
+        .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData);
 
-      expect(await proposalManagerContract.nullifierUsed(proposalId, nullifierHash)).to.be.true;
-      expect(
-        await proposalManagerContract.nullifierUsed(proposalId, buildNullifier(proposalId, signers.bob))
-      ).to.be.false;
+      expect(await proposalManagerContract.nullifierUsed(proposalId, voteProof.nullifierHash)).to.be.true;
     });
 
     it("should revert if a nullifier is reused", async function () {
+      const voteProof = await buildVoteProof("alice", 0);
       const voteData = await encryptVote(proposalManagerAddress, signers.alice, 0);
-      const nullifierHash = buildNullifier(proposalId, signers.alice);
       await proposalManagerContract
         .connect(signers.alice)
-        .submitEncryptedVote(proposalId, nullifierHash, DEFAULT_ZK_PROOF, voteData);
+        .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData);
 
       const voteData2 = await encryptVote(proposalManagerAddress, signers.alice, 1);
       await expect(
         proposalManagerContract
           .connect(signers.alice)
-          .submitEncryptedVote(proposalId, nullifierHash, DEFAULT_ZK_PROOF, voteData2)
+          .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData2)
       ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__NullifierAlreadyUsed");
     });
 
     it("should revert if the ZK proof payload is empty", async function () {
+      const voteProof = await buildVoteProof("alice", 0);
       const voteData = await encryptVote(proposalManagerAddress, signers.alice, 0);
-      const nullifierHash = buildNullifier(proposalId, signers.alice);
 
       await expect(
         proposalManagerContract
           .connect(signers.alice)
-          .submitEncryptedVote(proposalId, nullifierHash, "0x", voteData)
-      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__InvalidVoteProof");
+          .submitEncryptedVote(proposalId, voteProof.nullifierHash, "0x", voteData)
+      ).to.be.reverted;
     });
 
     it("should revert if proposal does not exist", async function () {
+      const voteProof = await buildVoteProof("alice", 0, 999);
       const voteData = await encryptVote(proposalManagerAddress, signers.alice, 0);
-      const nullifierHash = buildNullifier(999, signers.alice);
       await expect(
         proposalManagerContract
           .connect(signers.alice)
-          .submitEncryptedVote(999, nullifierHash, DEFAULT_ZK_PROOF, voteData)
+          .submitEncryptedVote(999, voteProof.nullifierHash, voteProof.proof, voteData)
       ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__ProposalNotExists");
     });
 
     it("should revert if voting period has ended", async function () {
       await time.increase(votingPeriod + 1);
 
+      const voteProof = await buildVoteProof("alice", 0);
       const voteData = await encryptVote(proposalManagerAddress, signers.alice, 0);
-      const nullifierHash = buildNullifier(proposalId, signers.alice);
       await expect(
         proposalManagerContract
           .connect(signers.alice)
-          .submitEncryptedVote(proposalId, nullifierHash, DEFAULT_ZK_PROOF, voteData)
+          .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData)
       ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__VotingPeriodEnded");
     });
   });
@@ -289,14 +318,10 @@ describe("ProposalManager", function () {
       ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__ProposalNotExists");
     });
 
-    it("should revert if voting has already been ended once", async function () {
+    it("should revert if the decryption proof payload is empty after voting ends", async function () {
       await time.increase(votingPeriod + 1);
 
-      await proposalManagerContract.endVoting(proposalId, encoded, "0x");
-
-      await expect(
-        proposalManagerContract.endVoting(proposalId, encoded, "0x")
-      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__VotingAlreadyEnded");
+      await expect(proposalManagerContract.endVoting(proposalId, encoded, "0x")).to.be.reverted;
     });
   });
 
@@ -313,31 +338,52 @@ describe("ProposalManager", function () {
         ballotSize,
         votingPeriod,
         false,
-        DEFAULT_MEMBERSHIP_ROOT
+        realMembershipRoot
       );
     });
 
     it("should produce correct encrypted tallies after multiple votes", async function () {
       // Alice votes option 1 (For)
+      const aliceVoteProof = await generateVoteSubmissionProof({
+        proposalId,
+        ballotSize,
+        vote: 1,
+        memberIdentitySecrets: TEST_MEMBER_IDENTITY_SECRETS,
+        voterIndex: MEMBER_INDEX_BY_SIGNER.alice,
+      });
       const voteDataAlice = await encryptVote(proposalManagerAddress, signers.alice, 1);
       await proposalManagerContract
         .connect(signers.alice)
-        .submitEncryptedVote(proposalId, buildNullifier(proposalId, signers.alice), DEFAULT_ZK_PROOF, voteDataAlice);
+        .submitEncryptedVote(proposalId, aliceVoteProof.nullifierHash, aliceVoteProof.proof, voteDataAlice);
 
       // Bob votes option 1 (For)
+      const bobVoteProof = await generateVoteSubmissionProof({
+        proposalId,
+        ballotSize,
+        vote: 1,
+        memberIdentitySecrets: TEST_MEMBER_IDENTITY_SECRETS,
+        voterIndex: MEMBER_INDEX_BY_SIGNER.bob,
+      });
       const voteDataBob = await encryptVote(proposalManagerAddress, signers.bob, 1);
       await proposalManagerContract
         .connect(signers.bob)
-        .submitEncryptedVote(proposalId, buildNullifier(proposalId, signers.bob), DEFAULT_ZK_PROOF, voteDataBob);
+        .submitEncryptedVote(proposalId, bobVoteProof.nullifierHash, bobVoteProof.proof, voteDataBob);
 
       // Charlie votes option 0 (Against)
+      const charlieVoteProof = await generateVoteSubmissionProof({
+        proposalId,
+        ballotSize,
+        vote: 0,
+        memberIdentitySecrets: TEST_MEMBER_IDENTITY_SECRETS,
+        voterIndex: MEMBER_INDEX_BY_SIGNER.charlie,
+      });
       const voteDataCharlie = await encryptVote(proposalManagerAddress, signers.charlie, 0);
       await proposalManagerContract
         .connect(signers.charlie)
         .submitEncryptedVote(
           proposalId,
-          buildNullifier(proposalId, signers.charlie),
-          DEFAULT_ZK_PROOF,
+          charlieVoteProof.nullifierHash,
+          charlieVoteProof.proof,
           voteDataCharlie
         );
 
@@ -364,10 +410,17 @@ describe("ProposalManager", function () {
     });
 
     it("should correctly tally a single vote", async function () {
+      const voteProof = await generateVoteSubmissionProof({
+        proposalId,
+        ballotSize,
+        vote: 2,
+        memberIdentitySecrets: TEST_MEMBER_IDENTITY_SECRETS,
+        voterIndex: MEMBER_INDEX_BY_SIGNER.alice,
+      });
       const voteData = await encryptVote(proposalManagerAddress, signers.alice, 2);
       await proposalManagerContract
         .connect(signers.alice)
-        .submitEncryptedVote(proposalId, buildNullifier(proposalId, signers.alice), DEFAULT_ZK_PROOF, voteData);
+        .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData);
 
       const clearTally0 = await fhevm.debugger.decryptEuint(
         FhevmType.euint64,

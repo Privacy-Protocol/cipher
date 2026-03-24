@@ -13,6 +13,8 @@ import {
 import { expect } from "chai";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
+import { generateVoteSubmissionProof } from "../scripts/generateVoteSubmissionProof";
+import { buildMembershipTree } from "../scripts/proofUtils";
 
 type Signers = {
   deployer: HardhatEthersSigner;
@@ -28,7 +30,12 @@ const MIN_TOKENS_TO_VOTE = ethers.parseEther("10");
 const VOTING_PERIOD = 86400; // 1 day
 const QUORUM_PERCENTAGE = 100; // out of 10_000
 const DEFAULT_MEMBERSHIP_ROOT = ethers.keccak256(ethers.toUtf8Bytes("demo-membership-root"));
-const DEFAULT_ZK_PROOF = "0x1234";
+const TEST_MEMBER_IDENTITY_SECRETS = [1001n, 1002n, 1003n];
+const MEMBER_INDEX_BY_SIGNER = {
+  alice: 0,
+  bob: 1,
+  charlie: 2,
+} as const;
 
 async function deployVoteSubmissionVerifier() {
   const zkTranscriptLibFactory = await ethers.getContractFactory("ZKTranscriptLib");
@@ -120,6 +127,7 @@ describe("DemoDao", function () {
   let token: MockERC20;
   let dao: DemoDao;
   let daoAddress: string;
+  let realMembershipRoot: string;
 
   before(async function () {
     const ethSigners = await ethers.getSigners();
@@ -130,6 +138,9 @@ describe("DemoDao", function () {
       charlie: ethSigners[3],
       nonMember: ethSigners[4],
     };
+
+    const membershipTree = await buildMembershipTree(TEST_MEMBER_IDENTITY_SECRETS);
+    realMembershipRoot = ethers.zeroPadValue(ethers.toBeHex(membershipTree.membershipRoot), 32);
   });
 
   beforeEach(async function () {
@@ -265,59 +276,80 @@ describe("DemoDao", function () {
   // ──────────────────────── vote() ────────────────────────
 
   describe("vote", function () {
+    async function buildVoteProof(
+      signerKey: keyof typeof MEMBER_INDEX_BY_SIGNER,
+      vote: number,
+      proposalId = 1,
+    ) {
+      return generateVoteSubmissionProof({
+        proposalId,
+        ballotSize: 3,
+        vote,
+        memberIdentitySecrets: TEST_MEMBER_IDENTITY_SECRETS,
+        voterIndex: MEMBER_INDEX_BY_SIGNER[signerKey],
+      });
+    }
+
     beforeEach(async function () {
       // Alice creates a proposal
       await dao
         .connect(signers.alice)
-        .createProposal(signers.bob.address, "0x", 0, DEFAULT_MEMBERSHIP_ROOT);
+        .createProposal(signers.bob.address, "0x", 0, realMembershipRoot);
     });
 
     it("should allow a member to vote on a proposal", async function () {
+      const voteProof = await buildVoteProof("alice", 1);
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
       const tx = await dao
         .connect(signers.alice)
-        .vote(1, buildNullifier(1, signers.alice), DEFAULT_ZK_PROOF, voteData);
+        .vote(1, voteProof.nullifierHash, voteProof.proof, voteData);
       await tx.wait();
 
-      expect(await proposalManager.nullifierUsed(1, buildNullifier(1, signers.alice))).to.be.true;
+      expect(await proposalManager.nullifierUsed(1, voteProof.nullifierHash)).to.be.true;
     });
 
     it("should relay the encrypted vote to ProposalManager", async function () {
+      const voteProof = await buildVoteProof("bob", 1);
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      await dao.connect(signers.bob).vote(1, buildNullifier(1, signers.bob), DEFAULT_ZK_PROOF, voteData);
+      await dao.connect(signers.bob).vote(1, voteProof.nullifierHash, voteProof.proof, voteData);
 
-      expect(await proposalManager.nullifierUsed(1, buildNullifier(1, signers.bob))).to.be.true;
+      expect(await proposalManager.nullifierUsed(1, voteProof.nullifierHash)).to.be.true;
     });
 
     it("should allow multiple members to vote on the same proposal", async function () {
+      const aliceVoteProof = await buildVoteProof("alice", 1);
       const voteDataAlice = await encryptVote(proposalManagerAddress, daoAddress, 1);
       await dao
         .connect(signers.alice)
-        .vote(1, buildNullifier(1, signers.alice), DEFAULT_ZK_PROOF, voteDataAlice);
+        .vote(1, aliceVoteProof.nullifierHash, aliceVoteProof.proof, voteDataAlice);
 
+      const bobVoteProof = await buildVoteProof("bob", 0);
       const voteDataBob = await encryptVote(proposalManagerAddress, daoAddress, 0);
-      await dao.connect(signers.bob).vote(1, buildNullifier(1, signers.bob), DEFAULT_ZK_PROOF, voteDataBob);
+      await dao.connect(signers.bob).vote(1, bobVoteProof.nullifierHash, bobVoteProof.proof, voteDataBob);
 
-      expect(await proposalManager.nullifierUsed(1, buildNullifier(1, signers.alice))).to.be.true;
-      expect(await proposalManager.nullifierUsed(1, buildNullifier(1, signers.bob))).to.be.true;
+      expect(await proposalManager.nullifierUsed(1, aliceVoteProof.nullifierHash)).to.be.true;
+      expect(await proposalManager.nullifierUsed(1, bobVoteProof.nullifierHash)).to.be.true;
     });
 
     it("should produce correct encrypted tallies after votes", async function () {
       // Alice votes For (option 1)
+      const aliceVoteProof = await buildVoteProof("alice", 1);
       const voteDataAlice = await encryptVote(proposalManagerAddress, daoAddress, 1);
       await dao
         .connect(signers.alice)
-        .vote(1, buildNullifier(1, signers.alice), DEFAULT_ZK_PROOF, voteDataAlice);
+        .vote(1, aliceVoteProof.nullifierHash, aliceVoteProof.proof, voteDataAlice);
 
       // Bob votes For (option 1)
+      const bobVoteProof = await buildVoteProof("bob", 1);
       const voteDataBob = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      await dao.connect(signers.bob).vote(1, buildNullifier(1, signers.bob), DEFAULT_ZK_PROOF, voteDataBob);
+      await dao.connect(signers.bob).vote(1, bobVoteProof.nullifierHash, bobVoteProof.proof, voteDataBob);
 
       // Charlie votes Against (option 0)
+      const charlieVoteProof = await buildVoteProof("charlie", 0);
       const voteDataCharlie = await encryptVote(proposalManagerAddress, daoAddress, 0);
       await dao
         .connect(signers.charlie)
-        .vote(1, buildNullifier(1, signers.charlie), DEFAULT_ZK_PROOF, voteDataCharlie);
+        .vote(1, charlieVoteProof.nullifierHash, charlieVoteProof.proof, voteDataCharlie);
 
       // Verify tallies via debugger
       const clearTally0 = await fhevm.debugger.decryptEuint(
@@ -338,39 +370,41 @@ describe("DemoDao", function () {
       expect(clearTally2).to.eq(0n); // 0 Abstain
     });
 
-    it("should allow any caller to relay a vote while verification is stubbed", async function () {
+    it("should allow any caller to relay a valid proof", async function () {
+      const relayedVoteProof = await buildVoteProof("alice", 1);
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
       await expect(
         dao
           .connect(signers.nonMember)
-          .vote(1, buildNullifier(1, signers.nonMember), DEFAULT_ZK_PROOF, voteData),
+          .vote(1, relayedVoteProof.nullifierHash, relayedVoteProof.proof, voteData),
       ).to.not.be.reverted;
     });
 
     it("should revert if the same nullifier is reused", async function () {
+      const voteProof = await buildVoteProof("alice", 1);
       const voteData1 = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      const nullifierHash = buildNullifier(1, signers.alice);
-      await dao.connect(signers.alice).vote(1, nullifierHash, DEFAULT_ZK_PROOF, voteData1);
+      await dao.connect(signers.alice).vote(1, voteProof.nullifierHash, voteProof.proof, voteData1);
 
       const voteData2 = await encryptVote(proposalManagerAddress, daoAddress, 0);
       await expect(
-        dao.connect(signers.alice).vote(1, nullifierHash, DEFAULT_ZK_PROOF, voteData2),
+        dao.connect(signers.alice).vote(1, voteProof.nullifierHash, voteProof.proof, voteData2),
       ).to.be.revertedWithCustomError(proposalManager, "ProposalManager__NullifierAlreadyUsed");
     });
 
     it("should revert if proposal does not exist", async function () {
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
       await expect(
-        dao.connect(signers.alice).vote(999, buildNullifier(999, signers.alice), DEFAULT_ZK_PROOF, voteData),
+        dao.connect(signers.alice).vote(999, buildNullifier(999, signers.alice), "0x", voteData),
       ).to.be.revertedWithCustomError(dao, "DemoDao__ProposalDoesNotExist");
     });
 
     it("should revert if voting period has ended", async function () {
       await time.increase(VOTING_PERIOD + 1);
 
+      const voteProof = await buildVoteProof("alice", 1);
       const voteData = await encryptVote(proposalManagerAddress, daoAddress, 1);
       await expect(
-        dao.connect(signers.alice).vote(1, buildNullifier(1, signers.alice), DEFAULT_ZK_PROOF, voteData),
+        dao.connect(signers.alice).vote(1, voteProof.nullifierHash, voteProof.proof, voteData),
       ).to.be.revertedWithCustomError(dao, "DemoDao__VotingPeriodEnded");
     });
   });
