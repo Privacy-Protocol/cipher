@@ -3,6 +3,8 @@ import { ethers, fhevm } from "hardhat";
 import {
   DemoDao,
   DemoDao__factory,
+  HonkVerifier,
+  HonkVerifier__factory,
   ProposalManager,
   ProposalManager__factory,
   MockERC20,
@@ -28,14 +30,33 @@ const QUORUM_PERCENTAGE = 100; // out of 10_000
 const DEFAULT_MEMBERSHIP_ROOT = ethers.keccak256(ethers.toUtf8Bytes("demo-membership-root"));
 const DEFAULT_ZK_PROOF = "0x1234";
 
+async function deployVoteSubmissionVerifier() {
+  const zkTranscriptLibFactory = await ethers.getContractFactory("ZKTranscriptLib");
+  const zkTranscriptLib = await zkTranscriptLibFactory.deploy();
+  const zkTranscriptLibAddress = await zkTranscriptLib.getAddress();
+
+  const verifierFactory = (await ethers.getContractFactory("HonkVerifier", {
+    libraries: {
+      ZKTranscriptLib: zkTranscriptLibAddress,
+    },
+  })) as HonkVerifier__factory;
+
+  const voteSubmissionVerifier = (await verifierFactory.deploy()) as HonkVerifier;
+  const voteSubmissionVerifierAddress = await voteSubmissionVerifier.getAddress();
+
+  return { voteSubmissionVerifier, voteSubmissionVerifierAddress };
+}
+
 /**
  * Deploy ProposalManager, MockERC20, and DemoDao.
  * Mints governance tokens to alice, bob, charlie so they qualify as members.
  */
 async function deployFixture(signers: Signers) {
+  const { voteSubmissionVerifierAddress } = await deployVoteSubmissionVerifier();
+
   // Deploy ProposalManager
   const pmFactory = (await ethers.getContractFactory("ProposalManager")) as ProposalManager__factory;
-  const proposalManager = (await pmFactory.deploy()) as ProposalManager;
+  const proposalManager = (await pmFactory.deploy(voteSubmissionVerifierAddress)) as ProposalManager;
   const proposalManagerAddress = await proposalManager.getAddress();
 
   // Deploy MockERC20

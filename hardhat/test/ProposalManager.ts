@@ -1,6 +1,6 @@
 import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
 import { ethers, fhevm } from "hardhat";
-import { ProposalManager, ProposalManager__factory } from "../types";
+import { HonkVerifier, HonkVerifier__factory, ProposalManager, ProposalManager__factory } from "../types";
 import { expect } from "chai";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 import { time } from "@nomicfoundation/hardhat-network-helpers";
@@ -15,12 +15,31 @@ type Signers = {
 const DEFAULT_MEMBERSHIP_ROOT = ethers.keccak256(ethers.toUtf8Bytes("demo-membership-root"));
 const DEFAULT_ZK_PROOF = "0x1234";
 
+async function deployVoteSubmissionVerifier() {
+  const zkTranscriptLibFactory = await ethers.getContractFactory("ZKTranscriptLib");
+  const zkTranscriptLib = await zkTranscriptLibFactory.deploy();
+  const zkTranscriptLibAddress = await zkTranscriptLib.getAddress();
+
+  const verifierFactory = (await ethers.getContractFactory("HonkVerifier", {
+    libraries: {
+      ZKTranscriptLib: zkTranscriptLibAddress,
+    },
+  })) as HonkVerifier__factory;
+
+  const voteSubmissionVerifier = (await verifierFactory.deploy()) as HonkVerifier;
+  const voteSubmissionVerifierAddress = await voteSubmissionVerifier.getAddress();
+
+  return { voteSubmissionVerifier, voteSubmissionVerifierAddress };
+}
+
 async function deployFixture() {
+  const { voteSubmissionVerifier, voteSubmissionVerifierAddress } = await deployVoteSubmissionVerifier();
+
   const factory = (await ethers.getContractFactory("ProposalManager")) as ProposalManager__factory;
-  const proposalManagerContract = (await factory.deploy()) as ProposalManager;
+  const proposalManagerContract = (await factory.deploy(voteSubmissionVerifierAddress)) as ProposalManager;
   const proposalManagerAddress = await proposalManagerContract.getAddress();
 
-  return { proposalManagerContract, proposalManagerAddress };
+  return { proposalManagerContract, proposalManagerAddress, voteSubmissionVerifier, voteSubmissionVerifierAddress };
 }
 
 /**
@@ -95,7 +114,6 @@ describe("ProposalManager", function () {
       expect(proposal.allowLiveReveal).to.eq(false);
       expect(proposal.membershipRoot).to.eq(DEFAULT_MEMBERSHIP_ROOT);
       expect(proposal.votingEnd).to.be.greaterThan(proposal.votingStart);
-      expect(proposal.voteCounts.length).to.eq(ballotSize);
     });
 
     it("should revert if proposal already exists", async function () {
@@ -246,6 +264,7 @@ describe("ProposalManager", function () {
     const proposalId = 1;
     const ballotSize = 3; // For, Against, Abstain
     const votingPeriod = 86400;
+    const encoded = ethers.AbiCoder.defaultAbiCoder().encode(["uint64[]"], [[0, 0, 0]]);
 
     beforeEach(async function () {
       await proposalManagerContract.propose(
@@ -258,7 +277,6 @@ describe("ProposalManager", function () {
     });
 
     it("should revert if voting period has not ended", async function () {
-      const encoded = ethers.AbiCoder.defaultAbiCoder().encode(["uint64[]"], [[0, 0, 0]]);
       await expect(
         proposalManagerContract.endVoting(proposalId, encoded, "0x")
       ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__VotingPeriodNotEnded");
@@ -266,10 +284,19 @@ describe("ProposalManager", function () {
 
     it("should revert if proposal does not exist", async function () {
       await time.increase(votingPeriod + 1);
-      const encoded = ethers.AbiCoder.defaultAbiCoder().encode(["uint64[]"], [[0, 0, 0]]);
       await expect(
         proposalManagerContract.endVoting(999, encoded, "0x")
       ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__ProposalNotExists");
+    });
+
+    it("should revert if voting has already been ended once", async function () {
+      await time.increase(votingPeriod + 1);
+
+      await proposalManagerContract.endVoting(proposalId, encoded, "0x");
+
+      await expect(
+        proposalManagerContract.endVoting(proposalId, encoded, "0x")
+      ).to.be.revertedWithCustomError(proposalManagerContract, "ProposalManager__VotingAlreadyEnded");
     });
   });
 
@@ -379,7 +406,6 @@ describe("ProposalManager", function () {
       expect(proposal.allowLiveReveal).to.be.true;
       expect(proposal.exists).to.be.true;
       expect(proposal.membershipRoot).to.eq(DEFAULT_MEMBERSHIP_ROOT);
-      expect(proposal.voteCounts.length).to.eq(2);
     });
   });
 });

@@ -37,6 +37,7 @@ const config: HardhatUserConfig = {
       accounts: {
         mnemonic: MNEMONIC,
       },
+      allowUnlimitedContractSize: true,
       chainId: 31337,
     },
     anvil: {

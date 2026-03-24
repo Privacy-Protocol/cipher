@@ -1,7 +1,7 @@
 [package]
 name = "circuits"
 type = "bin"
-authors = [""]
+authors = ["obaloluwa"]
 
 [dependencies]
-poseidon = { tag = "v0.1.1", git = "https://github.com/noir-lang/poseidon" }
+poseidon = { tag = "v0.2.6", git = "https://github.com/noir-lang/poseidon" }

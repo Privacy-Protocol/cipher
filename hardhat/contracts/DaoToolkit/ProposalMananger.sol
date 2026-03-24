@@ -2,7 +2,7 @@
 pragma solidity ^0.8.24;
 
 import {IProposalManager} from "./interface/IProposalManager.sol";
-import {HonkVerifier} from "./VoteSubmissionVerifier.sol";
+import {IVerifier} from "./VoteSubmissionVerifier.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {FHE, ebool, euint8, euint64, externalEuint8} from "@fhevm/solidity/lib/FHE.sol";
 
@@ -10,15 +10,15 @@ import {FHE, ebool, euint8, euint64, externalEuint8} from "@fhevm/solidity/lib/F
 /// @author Obaloluwa
 /// @notice Stores proposal config, encrypted tallies, and nullifier replay protection.
 contract ProposalManager is IProposalManager, ZamaEthereumConfig {
-    HonkVerifier public immutable voteSubmissionVerifier;
+    IVerifier public immutable voteSubmissionVerifier;
 
     mapping(uint256 proposalId => ProposalConfig proposal) public proposals;
     mapping(uint256 proposalId => mapping(bytes32 nullifierHash => bool used)) public nullifierUsed;
     mapping(uint256 proposalId => euint64[] eTallies) public encryptedTallies;
     mapping(uint256 proposalId => uint64[] rTallies) public revealedTallies;
 
-    constructor() {
-        voteSubmissionVerifier = new HonkVerifier();
+    constructor(address _voteSubmissionVerifier) {
+        voteSubmissionVerifier = IVerifier(_voteSubmissionVerifier);
     }
 
     function propose(
@@ -49,12 +49,16 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
             votingStart: block.timestamp,
             votingEnd: block.timestamp + _votingPeriod,
             membershipRoot: _membershipRoot,
+            ended: false,
             exists: true,
-            allowLiveReveal: _allowLiveReveal,
-            voteCounts: new uint256[](_ballotSize)
+            allowLiveReveal: _allowLiveReveal
         });
 
         encryptedTallies[_proposalId] = new euint64[](_ballotSize);
+        for (uint8 i = 0; i < _ballotSize; i++) {
+            encryptedTallies[_proposalId][i] = FHE.asEuint64(0);
+            FHE.allowThis(encryptedTallies[_proposalId][i]);
+        }
         revealedTallies[_proposalId] = new uint64[](_ballotSize);
 
         emit ProposalCreated(_proposalId, _ballotSize, _votingPeriod);
@@ -74,6 +78,10 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
             revert ProposalManager__ProposalNotExists();
         }
 
+        if (proposal.votingStart > block.timestamp) {
+            revert ProposalManager__VotingPeriodNotStarted();
+        }
+
         if (block.timestamp > proposal.votingEnd) {
             revert ProposalManager__VotingPeriodEnded();
         }
@@ -86,9 +94,9 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
             revert ProposalManager__InvalidVoteProof();
         }
 
-        _tallyEncryptedVote(_proposalId, proposal.ballotSize, voteData);
-
         nullifierUsed[_proposalId][_nullifierHash] = true;
+
+        _tallyEncryptedVote(_proposalId, proposal.ballotSize, voteData);
 
         emit VoteSubmitted(_proposalId);
     }
@@ -99,6 +107,14 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
         }
 
         return proposals[_proposalId];
+    }
+
+    function getRevealedTallies(uint256 _proposalId) external view returns (uint64[] memory tallies) {
+        if (!proposals[_proposalId].exists) {
+            revert ProposalManager__ProposalNotExists();
+        }
+
+        return revealedTallies[_proposalId];
     }
 
     function endVoting(uint256 _proposalId, bytes memory abiEncodedResults, bytes memory decryptionProof) external {
@@ -112,18 +128,21 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
             revert ProposalManager__VotingPeriodNotEnded();
         }
 
-        for (uint8 i = 0; i < proposal.ballotSize; i++) {
-            FHE.makePubliclyDecryptable(encryptedTallies[_proposalId][i]);
+        if (proposal.ended) {
+            revert ProposalManager__VotingAlreadyEnded();
         }
 
-        emit VotingEnded(_proposalId);
+        _makeTalliesPubliclyDecryptable(_proposalId, proposal.ballotSize);
 
         _revealFinalResults(_proposalId, abiEncodedResults, decryptionProof);
+        proposal.ended = true;
+
+        emit VotingEnded(_proposalId);
     }
 
     function revealAggregateTallies(uint256 _proposalId, bytes memory abiEncodedResults, bytes memory decryptionProof)
         external
-        returns (uint64[] memory decryptedTallies)
+        returns (uint64[] memory)
     {
         ProposalConfig storage proposal = proposals[_proposalId];
 
@@ -131,9 +150,14 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
             revert ProposalManager__ProposalNotExists();
         }
 
+        uint64[] memory decryptedTallies = new uint64[](proposal.ballotSize);
+
         if (block.timestamp < proposal.votingEnd) {
             if (proposal.allowLiveReveal) {
+                _makeTalliesPubliclyDecryptable(_proposalId, proposal.ballotSize);
                 decryptedTallies = _revealVote(_proposalId, abiEncodedResults, decryptionProof);
+                emit AggregateResultsRevealed(_proposalId, decryptedTallies);
+                return decryptedTallies;
             } else {
                 revert ProposalManager__VotingPeriodNotEnded();
             }
@@ -142,6 +166,7 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
         decryptedTallies = _revealVote(_proposalId, abiEncodedResults, decryptionProof);
 
         emit AggregateResultsRevealed(_proposalId, decryptedTallies);
+        return decryptedTallies;
     }
 
     function _revealFinalResults(uint256 _proposalId, bytes memory abiEncodedResults, bytes memory decryptionProof)
@@ -160,12 +185,7 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
         uint64[] memory decodedResults = _revealVote(_proposalId, abiEncodedResults, decryptionProof);
 
         revealedTallies[_proposalId] = decodedResults;
-
-        for (uint8 i = 0; i < proposal.ballotSize; i++) {
-            proposal.voteCounts[i] = decodedResults[i];
-        }
-
-        emit FinalResultsRevealed(_proposalId, proposal.voteCounts);
+        emit FinalResultsRevealed(_proposalId, decodedResults);
     }
 
     function _revealVote(uint256 _proposalId, bytes memory abiEncodedResults, bytes memory decryptionProof)
@@ -181,8 +201,10 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
 
         FHE.checkSignatures(votes, abiEncodedResults, decryptionProof);
 
-        // TODO: check if the decrypted votes are same length as encrypted votes
         decryptedVotes = abi.decode(abiEncodedResults, (uint64[]));
+        if (decryptedVotes.length != proposal.ballotSize) {
+            revert ProposalManager__InvalidDecryptedTalliesLength();
+        }
     }
 
     function _verifyVoteProof(
@@ -190,14 +212,23 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
         ProposalConfig storage proposal,
         bytes32 _nullifierHash,
         bytes calldata _zkProof
-    ) internal view returns (bool) {
+    ) internal returns (bool) {
         bytes32[] memory publicInputs = _buildCircuitPublicInputs(_proposalId, proposal, _nullifierHash);
         return voteSubmissionVerifier.verify(_zkProof, publicInputs);
     }
 
     function _tallyEncryptedVote(uint256 _proposalId, uint8 _ballotSize, bytes calldata voteData) internal {
         // TODO: add voter weight. for now its all 1 per vote.
-        (bytes32 _encryptedVote, bytes memory _voteProof) = abi.decode(voteData, (bytes32, bytes));
+        bytes32 _encryptedVote;
+        bytes memory _voteProof;
+
+        try this.decodeVoteData(voteData) returns (bytes32 encryptedVote_, bytes memory voteProof_) {
+            _encryptedVote = encryptedVote_;
+            _voteProof = voteProof_;
+        } catch {
+            revert ProposalManager__InvalidVoteProof();
+        }
+
         externalEuint8 extVote = externalEuint8.wrap(_encryptedVote);
         euint8 encryptedVote = FHE.fromExternal(extVote, _voteProof);
 
@@ -207,6 +238,20 @@ contract ProposalManager is IProposalManager, ZamaEthereumConfig {
 
             encryptedTallies[_proposalId][i] = FHE.add(encryptedTallies[_proposalId][i], increment);
             FHE.allowThis(encryptedTallies[_proposalId][i]);
+        }
+    }
+
+    function decodeVoteData(bytes calldata voteData)
+        external
+        pure
+        returns (bytes32 encryptedVote, bytes memory voteProof)
+    {
+        return abi.decode(voteData, (bytes32, bytes));
+    }
+
+    function _makeTalliesPubliclyDecryptable(uint256 _proposalId, uint8 _ballotSize) internal {
+        for (uint8 i = 0; i < _ballotSize; i++) {
+            FHE.makePubliclyDecryptable(encryptedTallies[_proposalId][i]);
         }
     }
 

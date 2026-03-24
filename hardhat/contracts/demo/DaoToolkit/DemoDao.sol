@@ -220,7 +220,7 @@ contract DemoDao is ReentrancyGuard {
     function hasReachedQuorum(uint256 proposalId) public view returns (bool) {
         // Since IProposalManager intentionally reverts if queried before voting ends,
         // this method can only be correctly utilized after the proposal's voting period has concluded.
-        uint[] memory counts = PROPOSAL_MANAGER.getProposalById(proposalId).voteCounts;
+        uint64[] memory counts = PROPOSAL_MANAGER.getRevealedTallies(proposalId);
 
         // Accumulating total votes across 0 (Against), 1 (For), and 2 (Abstain).
         uint256 totalVotes = counts[0] + counts[1] + counts[2];
@@ -250,7 +250,7 @@ contract DemoDao is ReentrancyGuard {
         ProposalCore storage proposal = s_proposals[proposalId];
 
         bool quorumReached = hasReachedQuorum(proposalId);
-        uint[] memory counts = PROPOSAL_MANAGER.getProposalById(proposalId).voteCounts;
+        uint64[] memory counts = PROPOSAL_MANAGER.getRevealedTallies(proposalId);
 
         bool passed = quorumReached && counts[1] > counts[0];
 
