@@ -5,7 +5,7 @@ import {euint8, euint64} from "@fhevm/solidity/lib/FHE.sol";
 
 /// @title IPrivateDaoAdapter
 /// @author Obaloluwa
-/// @notice Interface for the ProposalManager contract.
+/// @notice Interface for the PrivateDaoAdapter contract.
 interface IPrivateDaoAdapter {
     //////////////EVENTS///////////////////
     /// @notice Emitted when a new proposal is created.
@@ -22,10 +22,13 @@ interface IPrivateDaoAdapter {
     /// @param proposalId The ID of the proposal.
     event PDA__VotingEnded(uint256 indexed proposalId);
 
-    /// @notice Emitted when the results of a live proposal are revealed.
+    event PDA__ProposalCreatorUpdated(address indexed previousProposalCreator, address indexed newProposalCreator);
+    event PDA__FinalizerUpdated(address indexed previousFinalizer, address indexed newFinalizer);
+
+    /// @notice Emitted when the current encrypted tallies are returned.
     /// @param proposalId The ID of the proposal.
-    /// @param decryptedTallies The decrypted results of the voting.
-    event PDA__AggregateResultsRevealed(uint256 indexed proposalId, uint64[] indexed decryptedTallies);
+    /// @param encryptedTallies The current encrypted tally handles.
+    event PDA__AggregateResultsRevealed(uint256 indexed proposalId, bytes32[] encryptedTallies);
 
     /// @notice Emitted when the results of a closed proposal are revealed.
     /// @param proposalId The ID of the proposal.
@@ -41,10 +44,16 @@ interface IPrivateDaoAdapter {
     error PDA__NullifierAlreadyUsed();
     error PDA__VotingPeriodNotEnded();
     error PDA__InvalidMembershipRoot();
-    error PDA__InvalidVoteProof();
+    error PDA__InvalidVoteData();
     error PDA__InvalidDecryptedTalliesLength();
     error PDA__VotingPeriodNotStarted();
+    error PDA__LiveRevealNotAllowed();
     error PDA__VotingAlreadyEnded();
+    error PDA__Unauthorized();
+    error PDA__InvalidAddress();
+    error PDA__InvalidVerifier();
+    error PDA__FieldElementOutOfRange();
+    error PDA__ResultsNotRevealed();
 
     /// @notice Configuration of a proposal.
     /// @param ballotSize The number of available voting options (e.g., 2: Yes/No, 3: For/Against/Abstain).
@@ -86,7 +95,8 @@ interface IPrivateDaoAdapter {
     /// @notice Submits an encrypted vote and a nullifier-backed membership proof for a particular proposal.
     /// @param _proposalId The ID of the proposal being voted on.
     /// @param _nullifierHash The proposal-scoped nullifier emitted by the vote-verification circuit.
-    /// @param _zkProof The serialized Noir proof bytes. The verifier integration is stubbed for now.
+    /// @param _zkProof The serialized Noir proof bytes proving membership, nullifier correctness,
+    /// and range validity of a hidden vote witness. This proof does not currently bind that witness to voteData.
     /// @param voteData The ABI-encoded tuple of (bytes32 encryptedVote, bytes voteProof).
     function submitEncryptedVote(
         uint256 _proposalId,
@@ -99,18 +109,15 @@ interface IPrivateDaoAdapter {
     /// @param _proposalId The ID of the proposal to end voting on.
     /// @param abiEncodedResults The KMS plaintexts encoded results.
     /// @param decryptionProof The KMS decryption proof.
-    function endVoting(uint256 _proposalId, bytes memory abiEncodedResults, bytes memory decryptionProof) external;
+    function endVoting(uint256 _proposalId, bytes calldata abiEncodedResults, bytes calldata decryptionProof)
+        external;
 
-    /// @notice Reveals the current encrypted tallies for a live proposal.
+    /// @notice Returns the current encrypted tally handles for a proposal without changing decryptability.
     /// @param _proposalId The ID of the proposal to retrieve the encrypted tallies for.
-    /// @param abiEncodedResults The KMS plaintexts encoded results.
-    /// @param decryptionProof The KMS decryption proof.
-    /// @return decryptedTallies The decrypted tallies for the proposal.
-    function revealAggregateTallies(
-        uint256 _proposalId,
-        bytes memory abiEncodedResults,
-        bytes memory decryptionProof
-    ) external returns (uint64[] memory decryptedTallies);
+    /// @return currentEncryptedTallies The current encrypted tally handles for the proposal.
+    function getCurrentEncryptedTallies(
+        uint256 _proposalId
+    ) external view returns (bytes32[] memory currentEncryptedTallies);
 
     /// @notice Retrieves the latest revealed tallies for a proposal.
     /// @param _proposalId The ID of the proposal to query.

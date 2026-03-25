@@ -3,22 +3,70 @@ pragma solidity ^0.8.24;
 
 import {IPrivateDaoAdapter} from "./interface/IPrivateDaoAdapter.sol";
 import {IVerifier} from "./VoteSubmissionVerifier.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 import {FHE, ebool, euint8, euint64, externalEuint8} from "@fhevm/solidity/lib/FHE.sol";
 
-/// @title ProposalManager
+/// @title PrivateDaoAdapter
 /// @author Obaloluwa
 /// @notice Stores proposal config, encrypted tallies, and nullifier replay protection.
-contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
+contract PrivateDaoAdapter is IPrivateDaoAdapter, Ownable, ReentrancyGuard, ZamaEthereumConfig {
+    uint256 internal constant SNARK_SCALAR_FIELD =
+        21888242871839275222246405745257275088548364400416034343698204186575808495617;
+
     IVerifier public immutable voteSubmissionVerifier;
+    address public proposalCreator;
+    address public finalizer;
 
     mapping(uint256 proposalId => ProposalConfig proposal) public proposals;
     mapping(uint256 proposalId => mapping(bytes32 nullifierHash => bool used)) public nullifierUsed;
     mapping(uint256 proposalId => euint64[] eTallies) public encryptedTallies;
     mapping(uint256 proposalId => uint64[] rTallies) public revealedTallies;
 
-    constructor(address _voteSubmissionVerifier) {
+    constructor(address _voteSubmissionVerifier) Ownable(msg.sender) {
+        if (_voteSubmissionVerifier == address(0)) revert PDA__InvalidAddress();
+        if (_voteSubmissionVerifier.code.length == 0) revert PDA__InvalidVerifier();
+
         voteSubmissionVerifier = IVerifier(_voteSubmissionVerifier);
+        proposalCreator = msg.sender;
+        finalizer = msg.sender;
+    }
+
+    modifier onlyProposalCreator() {
+        if (msg.sender != owner() && msg.sender != proposalCreator) revert PDA__Unauthorized();
+        _;
+    }
+
+    modifier onlyFinalizer() {
+        if (msg.sender != owner() && msg.sender != finalizer) revert PDA__Unauthorized();
+        _;
+    }
+
+    function setProposalCreator(address _proposalCreator) external onlyOwner {
+        if (_proposalCreator == address(0)) revert PDA__InvalidAddress();
+
+        address previousProposalCreator = proposalCreator;
+        proposalCreator = _proposalCreator;
+
+        emit PDA__ProposalCreatorUpdated(previousProposalCreator, _proposalCreator);
+    }
+
+    function setFinalizer(address _finalizer) external onlyOwner {
+        if (_finalizer == address(0)) revert PDA__InvalidAddress();
+
+        address previousFinalizer = finalizer;
+        finalizer = _finalizer;
+
+        emit PDA__FinalizerUpdated(previousFinalizer, _finalizer);
+    }
+
+    function _requireCanonicalField(bytes32 value) internal pure {
+        if (uint256(value) >= SNARK_SCALAR_FIELD) revert PDA__FieldElementOutOfRange();
+    }
+
+    function _requireCanonicalField(uint256 value) internal pure {
+        if (value >= SNARK_SCALAR_FIELD) revert PDA__FieldElementOutOfRange();
     }
 
     function propose(
@@ -27,7 +75,7 @@ contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
         uint64 _votingPeriod,
         bool _allowLiveReveal,
         bytes32 _membershipRoot
-    ) external returns (ProposalConfig memory proposal) {
+    ) external onlyProposalCreator returns (ProposalConfig memory proposal) {
         if (proposals[_proposalId].exists) {
             revert PDA__ProposalAlreadyExists();
         }
@@ -44,6 +92,9 @@ contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
             revert PDA__InvalidMembershipRoot();
         }
 
+        _requireCanonicalField(_proposalId);
+        _requireCanonicalField(_membershipRoot);
+
         proposals[_proposalId] = ProposalConfig({
             ballotSize: _ballotSize,
             votingStart: block.timestamp,
@@ -55,9 +106,13 @@ contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
         });
 
         encryptedTallies[_proposalId] = new euint64[](_ballotSize);
-        for (uint8 i = 0; i < _ballotSize; i++) {
-            encryptedTallies[_proposalId][i] = FHE.asEuint64(0);
-            FHE.allowThis(encryptedTallies[_proposalId][i]);
+        euint64[] storage proposalTallies = encryptedTallies[_proposalId];
+        for (uint8 i = 0; i < _ballotSize;) {
+            proposalTallies[i] = FHE.asEuint64(0);
+            FHE.allowThis(proposalTallies[i]);
+            unchecked {
+                ++i;
+            }
         }
         revealedTallies[_proposalId] = new uint64[](_ballotSize);
 
@@ -71,27 +126,19 @@ contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
         bytes32 _nullifierHash,
         bytes calldata _zkProof,
         bytes calldata voteData
-    ) external {
+    ) external nonReentrant {
         ProposalConfig storage proposal = proposals[_proposalId];
 
-        if (!proposal.exists) {
-            revert PDA__ProposalNotExists();
-        }
+        if (!proposal.exists) revert PDA__ProposalNotExists();
+        if (proposal.votingStart > block.timestamp) revert PDA__VotingPeriodNotStarted();
+        if (block.timestamp > proposal.votingEnd) revert PDA__VotingPeriodEnded();
+        if (proposal.ended) revert PDA__VotingAlreadyEnded();
 
-        if (proposal.votingStart > block.timestamp) {
-            revert PDA__VotingPeriodNotStarted();
-        }
+        _requireCanonicalField(_nullifierHash);
 
-        if (block.timestamp > proposal.votingEnd) {
-            revert PDA__VotingPeriodEnded();
-        }
-
-        if (nullifierUsed[_proposalId][_nullifierHash]) {
-            revert PDA__NullifierAlreadyUsed();
-        }
-
+        if (nullifierUsed[_proposalId][_nullifierHash]) revert PDA__NullifierAlreadyUsed();
         if (!_verifyVoteProof(_proposalId, proposal, _nullifierHash, _zkProof)) {
-            revert PDA__InvalidVoteProof();
+            revert PDA__InvalidVoteData();
         }
 
         nullifierUsed[_proposalId][_nullifierHash] = true;
@@ -102,35 +149,28 @@ contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
     }
 
     function getProposalById(uint256 _proposalId) external view returns (ProposalConfig memory proposal) {
-        if (!proposals[_proposalId].exists) {
-            revert PDA__ProposalNotExists();
-        }
+        if (!proposals[_proposalId].exists) revert PDA__ProposalNotExists();
 
         return proposals[_proposalId];
     }
 
     function getRevealedTallies(uint256 _proposalId) external view returns (uint64[] memory tallies) {
-        if (!proposals[_proposalId].exists) {
-            revert PDA__ProposalNotExists();
-        }
+        if (!proposals[_proposalId].exists) revert PDA__ProposalNotExists();
+        if (!proposals[_proposalId].ended) revert PDA__ResultsNotRevealed();
 
         return revealedTallies[_proposalId];
     }
 
-    function endVoting(uint256 _proposalId, bytes memory abiEncodedResults, bytes memory decryptionProof) external {
+    function endVoting(
+        uint256 _proposalId,
+        bytes calldata abiEncodedResults,
+        bytes calldata decryptionProof
+    ) external onlyFinalizer nonReentrant {
         ProposalConfig storage proposal = proposals[_proposalId];
 
-        if (!proposal.exists) {
-            revert PDA__ProposalNotExists();
-        }
-
-        if (block.timestamp < proposal.votingEnd) {
-            revert PDA__VotingPeriodNotEnded();
-        }
-
-        if (proposal.ended) {
-            revert PDA__VotingAlreadyEnded();
-        }
+        if (!proposal.exists) revert PDA__ProposalNotExists();
+        if (block.timestamp < proposal.votingEnd) revert PDA__VotingPeriodNotEnded();
+        if (proposal.ended) revert PDA__VotingAlreadyEnded();
 
         _makeTalliesPubliclyDecryptable(_proposalId, proposal.ballotSize);
 
@@ -140,50 +180,34 @@ contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
         emit PDA__VotingEnded(_proposalId);
     }
 
-    function revealAggregateTallies(
-        uint256 _proposalId,
-        bytes memory abiEncodedResults,
-        bytes memory decryptionProof
-    ) external returns (uint64[] memory) {
+    function getCurrentEncryptedTallies(
+        uint256 _proposalId
+    ) external view returns (bytes32[] memory currentEncryptedTallies) {
         ProposalConfig storage proposal = proposals[_proposalId];
 
-        if (!proposal.exists) {
-            revert PDA__ProposalNotExists();
-        }
+        if (!proposal.exists) revert PDA__ProposalNotExists();
+        if (!proposal.allowLiveReveal) revert PDA__LiveRevealNotAllowed();
+        if (proposal.ended) revert PDA__VotingPeriodEnded();
 
-        uint64[] memory decryptedTallies = new uint64[](proposal.ballotSize);
-
-        if (block.timestamp < proposal.votingEnd) {
-            if (proposal.allowLiveReveal) {
-                _makeTalliesPubliclyDecryptable(_proposalId, proposal.ballotSize);
-                decryptedTallies = _revealVote(_proposalId, abiEncodedResults, decryptionProof);
-                emit PDA__AggregateResultsRevealed(_proposalId, decryptedTallies);
-                return decryptedTallies;
-            } else {
-                revert PDA__VotingPeriodNotEnded();
+        currentEncryptedTallies = new bytes32[](proposal.ballotSize);
+        euint64[] storage proposalTallies = encryptedTallies[_proposalId];
+        for (uint8 i = 0; i < proposal.ballotSize;) {
+            currentEncryptedTallies[i] = FHE.toBytes32(proposalTallies[i]);
+            unchecked {
+                ++i;
             }
         }
-
-        decryptedTallies = _revealVote(_proposalId, abiEncodedResults, decryptionProof);
-
-        emit PDA__AggregateResultsRevealed(_proposalId, decryptedTallies);
-        return decryptedTallies;
     }
 
     function _revealFinalResults(
         uint256 _proposalId,
-        bytes memory abiEncodedResults,
-        bytes memory decryptionProof
+        bytes calldata abiEncodedResults,
+        bytes calldata decryptionProof
     ) internal {
         ProposalConfig storage proposal = proposals[_proposalId];
 
-        if (!proposal.exists) {
-            revert PDA__ProposalNotExists();
-        }
-
-        if (block.timestamp < proposal.votingEnd) {
-            revert PDA__VotingPeriodNotEnded();
-        }
+        if (!proposal.exists) revert PDA__ProposalNotExists();
+        if (block.timestamp < proposal.votingEnd) revert PDA__VotingPeriodNotEnded();
 
         uint64[] memory decodedResults = _revealVote(_proposalId, abiEncodedResults, decryptionProof);
 
@@ -193,22 +217,25 @@ contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
 
     function _revealVote(
         uint256 _proposalId,
-        bytes memory abiEncodedResults,
-        bytes memory decryptionProof
+        bytes calldata abiEncodedResults,
+        bytes calldata decryptionProof
     ) internal returns (uint64[] memory decryptedVotes) {
         ProposalConfig storage proposal = proposals[_proposalId];
 
         bytes32[] memory votes = new bytes32[](proposal.ballotSize);
-        for (uint8 i = 0; i < proposal.ballotSize; i++) {
-            votes[i] = FHE.toBytes32(encryptedTallies[_proposalId][i]);
+        euint64[] storage proposalTallies = encryptedTallies[_proposalId];
+        for (uint8 i = 0; i < proposal.ballotSize;) {
+            votes[i] = FHE.toBytes32(proposalTallies[i]);
+            unchecked {
+                ++i;
+            }
         }
 
         FHE.checkSignatures(votes, abiEncodedResults, decryptionProof);
 
         decryptedVotes = abi.decode(abiEncodedResults, (uint64[]));
-        if (decryptedVotes.length != proposal.ballotSize) {
-            revert PDA__InvalidDecryptedTalliesLength();
-        }
+
+        if (decryptedVotes.length != proposal.ballotSize) revert PDA__InvalidDecryptedTalliesLength();
     }
 
     function _verifyVoteProof(
@@ -222,37 +249,30 @@ contract PrivateDaoAdapter is IPrivateDaoAdapter, ZamaEthereumConfig {
     }
 
     function _tallyEncryptedVote(uint256 _proposalId, uint8 _ballotSize, bytes calldata voteData) internal {
-        // TODO: add voter weight. for now its all 1 per vote.
-        bytes32 _encryptedVote;
-        bytes memory _voteProof;
-
-        try this.decodeVoteData(voteData) returns (bytes32 encryptedVote_, bytes memory voteProof_) {
-            _encryptedVote = encryptedVote_;
-            _voteProof = voteProof_;
-        } catch {
-            revert PDA__InvalidVoteProof();
-        }
+        (bytes32 _encryptedVote, bytes memory _voteProof) = abi.decode(voteData, (bytes32, bytes));
         externalEuint8 extVote = externalEuint8.wrap(_encryptedVote);
         euint8 encryptedVote = FHE.fromExternal(extVote, _voteProof);
 
-        for (uint8 i = 0; i < _ballotSize; i++) {
+        euint64[] storage proposalTallies = encryptedTallies[_proposalId];
+        for (uint8 i = 0; i < _ballotSize;) {
             ebool isThisOption = FHE.eq(encryptedVote, FHE.asEuint8(i));
             euint64 increment = FHE.select(isThisOption, FHE.asEuint64(1), FHE.asEuint64(0));
 
-            encryptedTallies[_proposalId][i] = FHE.add(encryptedTallies[_proposalId][i], increment);
-            FHE.allowThis(encryptedTallies[_proposalId][i]);
+            proposalTallies[i] = FHE.add(proposalTallies[i], increment);
+            FHE.allowThis(proposalTallies[i]);
+            unchecked {
+                ++i;
+            }
         }
     }
 
-    function decodeVoteData(
-        bytes calldata voteData
-    ) external pure returns (bytes32 encryptedVote, bytes memory voteProof) {
-        return abi.decode(voteData, (bytes32, bytes));
-    }
-
     function _makeTalliesPubliclyDecryptable(uint256 _proposalId, uint8 _ballotSize) internal {
-        for (uint8 i = 0; i < _ballotSize; i++) {
-            FHE.makePubliclyDecryptable(encryptedTallies[_proposalId][i]);
+        euint64[] storage proposalTallies = encryptedTallies[_proposalId];
+        for (uint8 i = 0; i < _ballotSize;) {
+            FHE.makePubliclyDecryptable(proposalTallies[i]);
+            unchecked {
+                ++i;
+            }
         }
     }
 

@@ -29,7 +29,7 @@ const MIN_TOKENS_TO_PROPOSE = ethers.parseEther("100");
 const MIN_TOKENS_TO_VOTE = ethers.parseEther("10");
 const VOTING_PERIOD = 86400; // 1 day
 const QUORUM_PERCENTAGE = 100; // out of 10_000
-const DEFAULT_MEMBERSHIP_ROOT = ethers.keccak256(ethers.toUtf8Bytes("demo-membership-root"));
+const DEFAULT_MEMBERSHIP_ROOT = ethers.zeroPadValue("0x1234", 32);
 const TEST_MEMBER_IDENTITY_SECRETS = [1001n, 1002n, 1003n];
 const MEMBER_INDEX_BY_SIGNER = {
   alice: 0,
@@ -82,6 +82,8 @@ async function deployFixture(signers: Signers) {
     QUORUM_PERCENTAGE,
   )) as DemoDao;
   const daoAddress = await dao.getAddress();
+
+  await proposalManager.setProposalCreator(daoAddress);
 
   // Mint tokens: alice & bob get enough to propose, charlie just enough to vote
   await token.mint(signers.alice.address, ethers.parseEther("200"));
@@ -349,7 +351,12 @@ describe("DemoDao", function () {
       const voteDataCharlie = await encryptVote(proposalManagerAddress, daoAddress, 0);
       await dao
         .connect(signers.charlie)
-        .vote(1, charlieVoteProof.nullifierHash, charlieVoteProof.proof, voteDataCharlie);
+        .vote(
+          1,
+          charlieVoteProof.nullifierHash,
+          charlieVoteProof.proof,
+          voteDataCharlie
+        );
 
       // Verify tallies via debugger
       const clearTally0 = await fhevm.debugger.decryptEuint(
@@ -383,7 +390,12 @@ describe("DemoDao", function () {
     it("should revert if the same nullifier is reused", async function () {
       const voteProof = await buildVoteProof("alice", 1);
       const voteData1 = await encryptVote(proposalManagerAddress, daoAddress, 1);
-      await dao.connect(signers.alice).vote(1, voteProof.nullifierHash, voteProof.proof, voteData1);
+      await dao.connect(signers.alice).vote(
+        1,
+        voteProof.nullifierHash,
+        voteProof.proof,
+        voteData1
+      );
 
       const voteData2 = await encryptVote(proposalManagerAddress, daoAddress, 0);
       await expect(

@@ -14,7 +14,7 @@ type Signers = {
   charlie: HardhatEthersSigner;
 };
 
-const DEFAULT_MEMBERSHIP_ROOT = ethers.keccak256(ethers.toUtf8Bytes("demo-membership-root"));
+const DEFAULT_MEMBERSHIP_ROOT = ethers.zeroPadValue("0x1234", 32);
 const TEST_MEMBER_IDENTITY_SECRETS = [1001n, 1002n, 1003n];
 const MEMBER_INDEX_BY_SIGNER = {
   alice: 0,
@@ -325,6 +325,53 @@ describe("ProposalManager", function () {
     });
   });
 
+  // ─────────────── getCurrentEncryptedTallies() ───────────────
+
+  describe("getCurrentEncryptedTallies", function () {
+    const proposalId = 1;
+    const ballotSize = 3;
+    const votingPeriod = 86400;
+
+    beforeEach(async function () {
+      await proposalManagerContract.propose(
+        proposalId,
+        ballotSize,
+        votingPeriod,
+        true,
+        realMembershipRoot
+      );
+    });
+
+    it("should return the current encrypted tally handles during voting", async function () {
+      const voteProof = await generateVoteSubmissionProof({
+        proposalId,
+        ballotSize,
+        vote: 1,
+        memberIdentitySecrets: TEST_MEMBER_IDENTITY_SECRETS,
+        voterIndex: MEMBER_INDEX_BY_SIGNER.alice,
+      });
+      const voteData = await encryptVote(proposalManagerAddress, signers.alice, 1);
+
+      await proposalManagerContract
+        .connect(signers.alice)
+        .submitEncryptedVote(proposalId, voteProof.nullifierHash, voteProof.proof, voteData);
+
+      const aggregateTallies = await proposalManagerContract.getCurrentEncryptedTallies(proposalId);
+      expect(aggregateTallies).to.deep.equal([
+        await proposalManagerContract.encryptedTallies(proposalId, 0),
+        await proposalManagerContract.encryptedTallies(proposalId, 1),
+        await proposalManagerContract.encryptedTallies(proposalId, 2),
+      ]);
+    });
+
+    it("should revert if proposal does not exist", async function () {
+      await expect(proposalManagerContract.getCurrentEncryptedTallies(999)).to.be.revertedWithCustomError(
+        proposalManagerContract,
+        "PDA__ProposalNotExists"
+      );
+    });
+  });
+
   // ────────── Encrypted Tally Verification (via debugger) ──────────
 
   describe("Encrypted tally correctness", function () {
@@ -354,7 +401,12 @@ describe("ProposalManager", function () {
       const voteDataAlice = await encryptVote(proposalManagerAddress, signers.alice, 1);
       await proposalManagerContract
         .connect(signers.alice)
-        .submitEncryptedVote(proposalId, aliceVoteProof.nullifierHash, aliceVoteProof.proof, voteDataAlice);
+        .submitEncryptedVote(
+          proposalId,
+          aliceVoteProof.nullifierHash,
+          aliceVoteProof.proof,
+          voteDataAlice
+        );
 
       // Bob votes option 1 (For)
       const bobVoteProof = await generateVoteSubmissionProof({
@@ -367,7 +419,12 @@ describe("ProposalManager", function () {
       const voteDataBob = await encryptVote(proposalManagerAddress, signers.bob, 1);
       await proposalManagerContract
         .connect(signers.bob)
-        .submitEncryptedVote(proposalId, bobVoteProof.nullifierHash, bobVoteProof.proof, voteDataBob);
+        .submitEncryptedVote(
+          proposalId,
+          bobVoteProof.nullifierHash,
+          bobVoteProof.proof,
+          voteDataBob
+        );
 
       // Charlie votes option 0 (Against)
       const charlieVoteProof = await generateVoteSubmissionProof({

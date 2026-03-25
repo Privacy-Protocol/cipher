@@ -164,7 +164,7 @@ contract DemoDao is ReentrancyGuard {
         uint256 voterWeight = 1;
         voterWeight;
 
-        // TODO: emit the decrypted vote choice once the encrypted vote payload is tied to a public support value.
+        // TODO: bind the hidden vote witness proven in zkProof to voteData once the encryption path supports it.
     }
 
     function execute(uint256 proposalId) external nonReentrant proposalExists(proposalId) {
