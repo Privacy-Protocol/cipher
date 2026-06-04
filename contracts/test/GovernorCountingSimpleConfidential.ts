@@ -30,12 +30,12 @@ describe("GovernorCountingSimpleConfidential", function () {
     }
   });
 
-  it("[1] COUNTING_MODE() returns the bravo for-and-abstain mode string", async function () {
+  it("COUNTING_MODE() returns the bravo for-and-abstain mode string", async function () {
     const { governor } = await deployFixture();
     expect(await governor.COUNTING_MODE()).to.eq("support=bravo&quorum=for,abstain");
   });
 
-  it("[2] proposalVotes() before any votes returns uninitialized handles", async function () {
+  it("proposalVotes() before any votes returns uninitialized handles", async function () {
     const { signers, governor } = await deployFixture();
     const proposalId = await createProposal(governor, signers.alice, "c2");
 
@@ -45,7 +45,7 @@ describe("GovernorCountingSimpleConfidential", function () {
     expect(abstain).to.eq(ethers.ZeroHash);
   });
 
-  it("[3] an abstain vote only increments the abstain counter", async function () {
+  it("an abstain vote only increments the abstain counter", async function () {
     const { signers, governor, governorAddress } = await deployFixture();
     const proposalId = await createAndActivate(governor, signers.alice, "c3");
 
@@ -57,7 +57,7 @@ describe("GovernorCountingSimpleConfidential", function () {
     expect(votes.against).to.eq(0n);
   });
 
-  it("[4] quorum counts FOR + ABSTAIN: abstain-only votes can reach quorum", async function () {
+  it("quorum counts FOR + ABSTAIN: abstain-only votes can reach quorum", async function () {
     const { signers, governor, governorAddress } = await deployFixture();
     const proposalId = await createAndActivate(governor, signers.alice, "c4");
 
@@ -68,7 +68,7 @@ describe("GovernorCountingSimpleConfidential", function () {
     expect(result.quorumReached).to.eq(true);
   });
 
-  it("[5] a proposal with AGAINST > FOR finalizes with voteSucceeded == false", async function () {
+  it("a proposal with AGAINST > FOR finalizes with voteSucceeded == false", async function () {
     const { signers, governor, governorAddress } = await deployFixture();
     const proposalId = await createAndActivate(governor, signers.alice, "c5");
 
@@ -80,7 +80,7 @@ describe("GovernorCountingSimpleConfidential", function () {
     expect(result.voteSucceeded).to.eq(false);
   });
 
-  it("[6] a proposal with FOR + ABSTAIN below quorum finalizes with quorumReached == false", async function () {
+  it("a proposal with FOR + ABSTAIN below quorum finalizes with quorumReached == false", async function () {
     const { signers, governor, governorAddress } = await deployFixture();
     const proposalId = await createAndActivate(governor, signers.alice, "c6");
 
@@ -91,7 +91,7 @@ describe("GovernorCountingSimpleConfidential", function () {
     expect(result.quorumReached).to.eq(false);
   });
 
-  it("[7] a tie (FOR == AGAINST) finalizes with voteSucceeded == false", async function () {
+  it("a tie (FOR == AGAINST) finalizes with voteSucceeded == false", async function () {
     const { signers, governor, governorAddress } = await deployFixture([
       ["alice", 10n],
       ["bob", 10n],
@@ -106,7 +106,7 @@ describe("GovernorCountingSimpleConfidential", function () {
     expect(result.voteSucceeded).to.eq(false); // FHE.gt is strict
   });
 
-  it("[8] the first vote initializes the counters and subsequent votes accumulate", async function () {
+  it("the first vote initializes the counters and subsequent votes accumulate", async function () {
     const { signers, governor, governorAddress } = await deployFixture();
     const proposalId = await createAndActivate(governor, signers.alice, "c8");
 

@@ -12,17 +12,17 @@ describe("GovernorVotesConfidential", function () {
     }
   });
 
-  it("[1] token() returns the address the governor was deployed with", async function () {
+  it("token() returns the address the governor was deployed with", async function () {
     const { governor, tokenAddress } = await deployFixture();
     expect(await governor.token()).to.eq(tokenAddress);
   });
 
-  it("[2] clock() delegates to the token's clock()", async function () {
+  it("clock() delegates to the token's clock()", async function () {
     const { governor, token } = await deployFixture();
     expect(await governor.clock()).to.eq(await token.clock());
   });
 
-  it("[3] CLOCK_MODE() delegates to the token's CLOCK_MODE()", async function () {
+  it("CLOCK_MODE() delegates to the token's CLOCK_MODE()", async function () {
     const { governor, token } = await deployFixture();
     expect(await governor.CLOCK_MODE()).to.eq(await token.CLOCK_MODE());
     expect(await governor.CLOCK_MODE()).to.eq("mode=timestamp");
@@ -37,18 +37,18 @@ describe("GovernorVotesConfidential", function () {
       return { governor };
     }
 
-    it("[4] clock() falls back to the block number", async function () {
+    it("clock() falls back to the block number", async function () {
       const { governor } = await deployWithNonClockToken();
       expect(await governor.clock()).to.eq(BigInt(await ethers.provider.getBlockNumber()));
     });
 
-    it("[5] CLOCK_MODE() falls back to the default block-number mode string", async function () {
+    it("CLOCK_MODE() falls back to the default block-number mode string", async function () {
       const { governor } = await deployWithNonClockToken();
       expect(await governor.CLOCK_MODE()).to.eq("mode=blocknumber&from=default");
     });
   });
 
-  it("[6] vote weight is read at the proposal snapshot, not the current block", async function () {
+  it("vote weight is read at the proposal snapshot, not the current block", async function () {
     const { signers, governor, governorAddress, token } = await deployFixture();
     const proposalId = await createAndActivate(governor, signers.alice, "v6");
 

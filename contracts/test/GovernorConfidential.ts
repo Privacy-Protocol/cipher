@@ -4,7 +4,6 @@ import {
   STATE_DEFEATED,
   VOTE_AGAINST,
   VOTE_FOR,
-  activate,
   advancePastDeadline,
   castVote,
   createAndActivate,
@@ -26,8 +25,15 @@ describe("GovernorConfidential", function () {
     }
   });
 
+  describe("constructor", function () {
+    it("initializes with the correct name and token", async function () {
+      const { governor } = await deployFixture();
+      expect(await governor.name()).to.eq("MyGovernor");
+    });
+  });
+
   describe("view functions before finalization", function () {
-    it("[6] quorumReached() reverts when the result is not finalized", async function () {
+    it("quorumReached() reverts when the result is not finalized", async function () {
       const { signers, governor } = await deployFixture();
       const proposalId = await createProposal(governor, signers.alice, "p6");
 
@@ -37,7 +43,7 @@ describe("GovernorConfidential", function () {
       );
     });
 
-    it("[7] voteSucceeded() reverts when the result is not finalized", async function () {
+    it("voteSucceeded() reverts when the result is not finalized", async function () {
       const { signers, governor } = await deployFixture();
       const proposalId = await createProposal(governor, signers.alice, "p7");
 
@@ -47,7 +53,7 @@ describe("GovernorConfidential", function () {
       );
     });
 
-    it("[8] state() reverts when called after the deadline but before finalization", async function () {
+    it("state() reverts when called after the deadline but before finalization", async function () {
       const { signers, governor } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p8");
       await advancePastDeadline(governor, proposalId);
@@ -60,7 +66,7 @@ describe("GovernorConfidential", function () {
   });
 
   describe("cleartext vote rejection", function () {
-    it("[9] getVotes() reverts with NormalGetVotesNotSupported", async function () {
+    it("getVotes() reverts with NormalGetVotesNotSupported", async function () {
       const { signers, governor } = await deployFixture();
 
       await expect(governor.getVotes(signers.alice.address, 0n)).to.be.revertedWithCustomError(
@@ -69,7 +75,7 @@ describe("GovernorConfidential", function () {
       );
     });
 
-    it("[10] castVoteWithReason() reverts with NormalVotesNotSupported", async function () {
+    it("castVoteWithReason() reverts with NormalVotesNotSupported", async function () {
       const { signers, governor } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p10");
 
@@ -78,7 +84,7 @@ describe("GovernorConfidential", function () {
       ).to.be.revertedWithCustomError(governor, "GovernorConfidential__NormalVotesNotSupported");
     });
 
-    it("[11] castVoteWithReasonAndParams() reverts with NormalVotesNotSupported", async function () {
+    it("castVoteWithReasonAndParams() reverts with NormalVotesNotSupported", async function () {
       const { signers, governor } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p11");
 
@@ -87,7 +93,7 @@ describe("GovernorConfidential", function () {
       ).to.be.revertedWithCustomError(governor, "GovernorConfidential__NormalVotesNotSupported");
     });
 
-    it("[12] castVoteBySig() with a valid signature reverts with NormalVotesNotSupported", async function () {
+    it("castVoteBySig() with a valid signature reverts with NormalVotesNotSupported", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p12");
 
@@ -98,7 +104,7 @@ describe("GovernorConfidential", function () {
       ).to.be.revertedWithCustomError(governor, "GovernorConfidential__NormalVotesNotSupported");
     });
 
-    it("[13] castVoteWithReasonAndParamsBySig() with a valid signature reverts with NormalVotesNotSupported", async function () {
+    it("castVoteWithReasonAndParamsBySig() with a valid signature reverts with NormalVotesNotSupported", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p13");
 
@@ -128,7 +134,7 @@ describe("GovernorConfidential", function () {
   });
 
   describe("alternate encrypted entry points", function () {
-    it("[14] castEncryptedVoteWithReason() emits EncryptedVoteCast with the reason", async function () {
+    it("castEncryptedVoteWithReason() emits EncryptedVoteCast with the reason", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p14");
 
@@ -140,7 +146,7 @@ describe("GovernorConfidential", function () {
       ).to.emit(governor, "EncryptedVoteCast");
     });
 
-    it("[15] castEncryptedVoteWithReasonAndParams() with non-empty params emits EncryptedVoteCastWithParams", async function () {
+    it("castEncryptedVoteWithReasonAndParams() with non-empty params emits EncryptedVoteCastWithParams", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p15");
 
@@ -154,7 +160,7 @@ describe("GovernorConfidential", function () {
         .and.to.not.emit(governor, "EncryptedVoteCast");
     });
 
-    it("[16] castEncryptedVoteWithReasonAndParams() with empty params emits EncryptedVoteCast", async function () {
+    it("castEncryptedVoteWithReasonAndParams() with empty params emits EncryptedVoteCast", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p16");
 
@@ -170,7 +176,7 @@ describe("GovernorConfidential", function () {
   });
 
   describe("signature-based encrypted voting", function () {
-    it("[17] castEncryptedVoteBySig() with a valid signature casts the vote", async function () {
+    it("castEncryptedVoteBySig() with a valid signature casts the vote", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p17");
 
@@ -195,7 +201,7 @@ describe("GovernorConfidential", function () {
       expect(await governor.hasVoted(proposalId, signers.alice.address)).to.eq(true);
     });
 
-    it("[18] castEncryptedVoteBySig() with an invalid signature reverts with GovernorInvalidSignature", async function () {
+    it("castEncryptedVoteBySig() with an invalid signature reverts with GovernorInvalidSignature", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p18");
 
@@ -218,7 +224,7 @@ describe("GovernorConfidential", function () {
       ).to.be.revertedWithCustomError(governor, "GovernorInvalidSignature");
     });
 
-    it("[19] castEncryptedVoteWithReasonAndParamsBySig() with a valid signature casts the vote", async function () {
+    it("castEncryptedVoteWithReasonAndParamsBySig() with a valid signature casts the vote", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p19");
 
@@ -254,7 +260,7 @@ describe("GovernorConfidential", function () {
       expect(await governor.hasVoted(proposalId, signers.alice.address)).to.eq(true);
     });
 
-    it("[20] castEncryptedVoteWithReasonAndParamsBySig() with an invalid signature reverts with GovernorInvalidSignature", async function () {
+    it("castEncryptedVoteWithReasonAndParamsBySig() with an invalid signature reverts with GovernorInvalidSignature", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p20");
 
@@ -290,7 +296,7 @@ describe("GovernorConfidential", function () {
   });
 
   describe("state-machine enforcement on encrypted voting", function () {
-    it("[21] castEncryptedVote() while Pending reverts with GovernorUnexpectedProposalState", async function () {
+    it("castEncryptedVote() while Pending reverts with GovernorUnexpectedProposalState", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createProposal(governor, signers.alice, "p21");
 
@@ -300,7 +306,7 @@ describe("GovernorConfidential", function () {
       ).to.be.revertedWithCustomError(governor, "GovernorUnexpectedProposalState");
     });
 
-    it("[22] castEncryptedVote() after the deadline reverts", async function () {
+    it("castEncryptedVote() after the deadline reverts", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p22");
       await advancePastDeadline(governor, proposalId);
@@ -316,7 +322,7 @@ describe("GovernorConfidential", function () {
   });
 
   describe("defeated proposal paths", function () {
-    it("[24] a proposal that does not reach quorum finalizes Defeated", async function () {
+    it("a proposal that does not reach quorum finalizes Defeated", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p24");
 
@@ -330,7 +336,7 @@ describe("GovernorConfidential", function () {
       expect(await governor.state(proposalId)).to.eq(STATE_DEFEATED);
     });
 
-    it("[25] a proposal with FOR <= AGAINST finalizes Defeated even though quorum is reached", async function () {
+    it("a proposal with FOR <= AGAINST finalizes Defeated even though quorum is reached", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const proposalId = await createAndActivate(governor, signers.alice, "p25");
 
@@ -347,7 +353,7 @@ describe("GovernorConfidential", function () {
   });
 
   describe("encrypted result before decryption is requested", function () {
-    it("[26] encryptedProposalResult() returns uninitialized handles", async function () {
+    it("encryptedProposalResult() returns uninitialized handles", async function () {
       const { signers, governor } = await deployFixture();
       const proposalId = await createProposal(governor, signers.alice, "p26");
 

@@ -22,3 +22,5 @@ docs/
 
 # Dotenv file
 .env
+
+memory

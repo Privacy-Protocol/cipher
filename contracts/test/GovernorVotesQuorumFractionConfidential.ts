@@ -65,7 +65,7 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
   });
 
   describe("constructor validation", function () {
-    it("[1] deploying with a numerator > 100 reverts with GovernorInvalidQuorumFraction", async function () {
+    it("deploying with a numerator > 100 reverts with GovernorInvalidQuorumFraction", async function () {
       const { tokenAddress } = await deployFixture();
       const factory = await ethers.getContractFactory("ConfigurableGovernor");
       const reference = await factory.deploy(tokenAddress, 4n); // valid, used for the error interface
@@ -78,17 +78,17 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
   });
 
   describe("view accessors", function () {
-    it("[2] quorumDenominator() returns 100", async function () {
+    it("quorumDenominator() returns 100", async function () {
       const { governor } = await deployFixture();
       expect(await governor.quorumDenominator()).to.eq(100n);
     });
 
-    it("[3] quorumNumerator() returns the most recently set numerator", async function () {
+    it("quorumNumerator() returns the most recently set numerator", async function () {
       const { governor } = await deployFixture();
       expect(await governor.quorumNumerator()).to.eq(4n);
     });
 
-    it("[4] quorum(timepoint) reverts with GovernorConfidentialQuorumIsEncrypted", async function () {
+    it("quorum(timepoint) reverts with GovernorConfidentialQuorumIsEncrypted", async function () {
       const { governor } = await deployFixture();
       await expect(governor.quorum(0n)).to.be.revertedWithCustomError(
         governor,
@@ -98,7 +98,7 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
   });
 
   describe("confidentialQuorum", function () {
-    it("[5] confidentialQuorum(timepoint) decrypts to floor(totalSupply * numerator / 100)", async function () {
+    it("confidentialQuorum(timepoint) decrypts to floor(totalSupply * numerator / 100)", async function () {
       const { governor, token } = await deployFixture();
       const timepoint = (await token.clock()) - 1n;
 
@@ -106,20 +106,19 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
       expect(await decryptConfidentialQuorum(governor, timepoint)).to.eq(1n);
     });
 
-    it("[6] confidentialQuorum with zero total supply decrypts to zero", async function () {
+    it("confidentialQuorum with zero total supply decrypts to zero", async function () {
       const [deployer, alice] = await ethers.getSigners();
-      const token = (await (await ethers.getContractFactory("MyToken")).deploy(
-        deployer.address,
-        deployer.address,
-      )) as unknown as MyToken;
+      const token = (await (
+        await ethers.getContractFactory("MyToken")
+      ).deploy(deployer.address, deployer.address)) as unknown as MyToken;
       const tokenAddress = await token.getAddress();
       // Mint 0 so the total-supply handle is initialized but the supply stays zero.
       const enc0 = await encryptUint64(tokenAddress, deployer.address, 0n);
       await token.connect(deployer).mint(alice.address, enc0.handle, enc0.proof);
 
-      const governor = (await (await ethers.getContractFactory("MyGovernor")).deploy(
-        tokenAddress,
-      )) as unknown as MyGovernor;
+      const governor = (await (
+        await ethers.getContractFactory("MyGovernor")
+      ).deploy(tokenAddress)) as unknown as MyGovernor;
       const governorAddress = await governor.getAddress();
       await token.connect(deployer).getHandleAllowance(await token.confidentialTotalSupply(), governorAddress, true);
 
@@ -129,7 +128,7 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
   });
 
   describe("updateQuorumNumerator (governance-gated)", function () {
-    it("[7] a non-governance caller reverts with GovernorOnlyExecutor", async function () {
+    it("a non-governance caller reverts with GovernorOnlyExecutor", async function () {
       const { signers, governor } = await deployFixture();
       await expect(governor.connect(signers.alice).updateQuorumNumerator(5n)).to.be.revertedWithCustomError(
         governor,
@@ -137,7 +136,7 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
       );
     });
 
-    it("[8] through governance emits QuorumNumeratorUpdated(old, new)", async function () {
+    it("through governance emits QuorumNumeratorUpdated(old, new)", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const execute = await prepareGovernanceCall(
         governor,
@@ -151,7 +150,7 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
       expect(await governor.quorumNumerator()).to.eq(10n);
     });
 
-    it("[9] through governance with a value > 100 reverts with GovernorInvalidQuorumFraction", async function () {
+    it("through governance with a value > 100 reverts with GovernorInvalidQuorumFraction", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const execute = await prepareGovernanceCall(
         governor,
@@ -164,7 +163,7 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
       await expect(execute()).to.be.revertedWithCustomError(governor, "GovernorInvalidQuorumFraction");
     });
 
-    it("[10] a zero numerator is accepted and proposals always reach quorum", async function () {
+    it("a zero numerator is accepted and proposals always reach quorum", async function () {
       const { signers, governor, governorAddress } = await deployFixture(undefined, 0n);
       expect(await governor.quorumNumerator()).to.eq(0n);
 
@@ -178,20 +177,20 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
       expect(result.quorumReached).to.eq(true);
     });
 
-    it("[11] a numerator of 100 is accepted", async function () {
+    it("a numerator of 100 is accepted", async function () {
       const { governor } = await deployFixture(undefined, 100n);
       expect(await governor.quorumNumerator()).to.eq(100n);
     });
   });
 
   describe("historical numerator lookup", function () {
-    it("[12] quorumNumerator(timepoint) after the latest update returns the latest numerator", async function () {
+    it("quorumNumerator(timepoint) after the latest update returns the latest numerator", async function () {
       const { governor } = await deployFixture();
       const future = (await governor.clock()) + 1000n;
       expect(await governor["quorumNumerator(uint256)"](future)).to.eq(4n);
     });
 
-    it("[13] quorumNumerator(timepoint) before the latest update returns the older numerator", async function () {
+    it("quorumNumerator(timepoint) before the latest update returns the older numerator", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
       const beforeUpdate = await governor.clock();
 
@@ -208,7 +207,7 @@ describe("GovernorVotesQuorumFractionConfidential", function () {
       expect(await governor["quorumNumerator(uint256)"](beforeUpdate)).to.eq(4n); // historical (binary search)
     });
 
-    it("[14] a proposal evaluates quorum with the numerator at its snapshot, not a later value", async function () {
+    it("a proposal evaluates quorum with the numerator at its snapshot, not a later value", async function () {
       const { signers, governor, governorAddress } = await deployFixture();
 
       // Proposal created while the numerator is 4.
