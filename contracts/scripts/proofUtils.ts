@@ -8,7 +8,6 @@ export type BigNumberishLike = bigint | number | string;
 
 export type MembershipProof = {
   identitySecret: bigint;
-  voteWeight: bigint;
   leafHash: bigint;
   leafIndex: number;
   siblingPath: bigint[];
@@ -17,7 +16,6 @@ export type MembershipProof = {
 
 export type MembershipTree = {
   identitySecrets: bigint[];
-  voteWeights: bigint[];
   leafHashes: bigint[];
   membershipRoot: bigint;
   proofs: MembershipProof[];
@@ -53,8 +51,8 @@ export async function poseidonPair(left: BigNumberishLike, right: BigNumberishLi
   return poseidonHash([left, right]);
 }
 
-export async function computeMembershipLeaf(identitySecret: BigNumberishLike, voteWeight: BigNumberishLike): Promise<bigint> {
-  return poseidonHash([identitySecret, voteWeight]);
+export async function computeMembershipLeaf(identitySecret: BigNumberishLike): Promise<bigint> {
+  return poseidonHash([identitySecret]);
 }
 
 export async function computeNullifier(
@@ -68,14 +66,13 @@ export function toBytes32(value: BigNumberishLike): string {
   return ethers.zeroPadValue(ethers.toBeHex(parseBigInt(value)), 32);
 }
 
-export async function buildMembershipTree(identitySecretsInput: BigNumberishLike[], voteWeightsInput: BigNumberishLike[]): Promise<MembershipTree> {
+export async function buildMembershipTree(identitySecretsInput: BigNumberishLike[]): Promise<MembershipTree> {
   const identitySecrets = identitySecretsInput.map(parseBigInt);
-  const voteWeights = voteWeightsInput.map(parseBigInt);
   if (identitySecrets.length === 0) {
     throw new Error("At least one identity secret is required to build a membership tree");
   }
 
-  const leafHashes = await Promise.all(identitySecrets.map((identitySecret, index) => computeMembershipLeaf(identitySecret, voteWeights[index])));
+  const leafHashes = await Promise.all(identitySecrets.map((identitySecret) => computeMembershipLeaf(identitySecret)));
   const levels: Array<Map<number, bigint>> = [];
 
   levels[0] = new Map<number, bigint>();
@@ -113,7 +110,6 @@ export async function buildMembershipTree(identitySecretsInput: BigNumberishLike
 
     return {
       identitySecret,
-      voteWeight: voteWeights[index],
       leafHash: leafHashes[index],
       leafIndex: index,
       siblingPath,
@@ -123,7 +119,6 @@ export async function buildMembershipTree(identitySecretsInput: BigNumberishLike
 
   return {
     identitySecrets,
-    voteWeights,
     leafHashes,
     membershipRoot,
     proofs,

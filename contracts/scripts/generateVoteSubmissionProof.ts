@@ -17,21 +17,15 @@ const DEFAULT_CIRCUIT_PATH = path.resolve(__dirname, "../../circuits/target/circ
 type VoteCircuitInput = {
   proposal_id: string;
   membership_root: string;
-  ballot_size: number;
   nullifier_hash: string;
   identity_secret: string;
-  vote_weight: string;
-  vote: number;
   leaf_index: number;
   sibling_path: string[];
 };
 
 export type VoteSubmissionProofRequest = {
   proposalId: BigNumberishLike;
-  ballotSize: number;
-  vote: number;
   memberIdentitySecrets: BigNumberishLike[];
-  memberVoteWeights: BigNumberishLike[];
   voterIndex: number;
   circuitPath?: string;
 };
@@ -40,11 +34,8 @@ export type VoteSubmissionProofPayload = {
   proof: string;
   publicInputs: string[];
   proposalId: string;
-  ballotSize: number;
-  vote: number;
   voterIndex: number;
   identitySecret: string;
-  voteWeight: string;
   membershipRoot: string;
   nullifierHash: string;
   leafIndex: number;
@@ -61,15 +52,7 @@ type CircuitArtifact = {
 
 const circuitArtifactCache = new Map<string, CircuitArtifact>();
 
-function assertValidRequest({ ballotSize, vote, memberIdentitySecrets, voterIndex }: VoteSubmissionProofRequest): void {
-  if (!Number.isInteger(ballotSize) || ballotSize <= 0 || ballotSize > 255) {
-    throw new Error(`ballotSize must be a positive uint8-compatible integer, received ${ballotSize}`);
-  }
-
-  if (!Number.isInteger(vote) || vote < 0) {
-    throw new Error(`vote must be a non-negative integer, received ${vote}`);
-  }
-
+function assertValidRequest({ memberIdentitySecrets, voterIndex }: VoteSubmissionProofRequest): void {
   if (!Number.isInteger(voterIndex) || voterIndex < 0 || voterIndex >= memberIdentitySecrets.length) {
     throw new Error(`voterIndex ${voterIndex} is outside the memberIdentitySecrets array`);
   }
@@ -95,18 +78,15 @@ export async function generateVoteSubmissionProof(
   const proposalId = parseBigInt(request.proposalId);
   const circuitPath = request.circuitPath ?? DEFAULT_CIRCUIT_PATH;
   const circuit = loadCircuitArtifact(circuitPath);
-  const membershipTree = await buildMembershipTree(request.memberIdentitySecrets, request.memberVoteWeights);
+  const membershipTree = await buildMembershipTree(request.memberIdentitySecrets);
   const membershipProof = membershipTree.proofs[request.voterIndex];
   const nullifierHash = await computeNullifier(proposalId, membershipProof.identitySecret);
 
   const circuitInput: VoteCircuitInput = {
     proposal_id: proposalId.toString(),
     membership_root: membershipTree.membershipRoot.toString(),
-    ballot_size: request.ballotSize,
     nullifier_hash: nullifierHash.toString(),
     identity_secret: membershipProof.identitySecret.toString(),
-    vote_weight: membershipProof.voteWeight.toString(),
-    vote: request.vote,
     leaf_index: membershipProof.leafIndex,
     sibling_path: membershipProof.siblingPath.map((sibling) => sibling.toString()),
   };
@@ -130,11 +110,8 @@ export async function generateVoteSubmissionProof(
     proof: ethers.hexlify(proof),
     publicInputs: publicInputs.map((value) => ethers.zeroPadValue(value, 32)),
     proposalId: proposalId.toString(),
-    ballotSize: request.ballotSize,
-    vote: request.vote,
     voterIndex: request.voterIndex,
     identitySecret: membershipProof.identitySecret.toString(),
-    voteWeight: membershipProof.voteWeight.toString(),
     membershipRoot: toBytes32(membershipTree.membershipRoot),
     nullifierHash: toBytes32(nullifierHash),
     leafIndex: membershipProof.leafIndex,
