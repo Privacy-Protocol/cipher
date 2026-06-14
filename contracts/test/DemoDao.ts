@@ -236,3 +236,190 @@ describe("DemoDao", function () {
     ).to.be.reverted;
   });
 });
+
+describe("DemoDao — optional ZK gate disabled (FHE-only)", function () {
+  let signers: Signers;
+  let token: MyToken;
+  let tokenAddress: string;
+  let dao: DemoDao;
+  let daoAddress: string;
+
+  const targets = () => [signers.deployer.address];
+  const values = [0n];
+  const calldatas = ["0x"];
+  const description = "DemoDao: FHE-only proposal (no membership gate)";
+
+  beforeEach(async function () {
+    if (!fhevm.isMock) {
+      console.warn("This hardhat test suite requires the mock FHEVM engine");
+      this.skip();
+    }
+
+    const eth = await ethers.getSigners();
+    signers = { deployer: eth[0], alice: eth[1], bob: eth[2], charlie: eth[3], nonMember: eth[4] };
+
+    token = (await (await ethers.getContractFactory("MyToken")).deploy(
+      signers.deployer.address,
+      signers.deployer.address,
+    )) as unknown as MyToken;
+    tokenAddress = await token.getAddress();
+
+    // Deploy the adapter with NO verifier and a zero root → ZK membership gate disabled.
+    dao = (await (await ethers.getContractFactory("DemoDao")).deploy(
+      tokenAddress,
+      ethers.ZeroAddress,
+      ethers.ZeroHash,
+    )) as unknown as DemoDao;
+    daoAddress = await dao.getAddress();
+
+    for (const name of ["alice", "bob", "charlie"] as const) {
+      const holder = signers[name];
+      const enc = await encryptUint64(tokenAddress, signers.deployer.address, TOKEN_WEIGHTS[name]);
+      await token.connect(signers.deployer).mint(holder.address, enc.handle, enc.proof);
+      await token.connect(holder).delegate(holder.address);
+    }
+    for (const name of ["alice", "bob", "charlie"] as const) {
+      await token
+        .connect(signers.deployer)
+        .getHandleAllowance(await token.getVotes(signers[name].address), daoAddress, true);
+    }
+    await token.connect(signers.deployer).getHandleAllowance(await token.confidentialTotalSupply(), daoAddress, true);
+  });
+
+  async function propose(): Promise<bigint> {
+    const proposalId = await dao.hashProposal(targets(), values, calldatas, ethers.id(description));
+    await dao.connect(signers.alice).propose(targets(), values, calldatas, description);
+    await time.increaseTo((await dao.proposalSnapshot(proposalId)) + 1n);
+    return proposalId;
+  }
+
+  it("reports the ZK gate as disabled with no verifier or root configured", async function () {
+    expect(await dao.zkMembershipEnabled()).to.eq(false);
+    expect(await dao.voteSubmissionVerifier()).to.eq(ethers.ZeroAddress);
+    expect(await dao.membershipRoot()).to.eq(ethers.ZeroHash);
+  });
+
+  it("accepts plain encrypted votes via the inherited entrypoint and tallies them", async function () {
+    const proposalId = await propose();
+    expect(await dao.state(proposalId)).to.eq(STATE_ACTIVE);
+
+    const aliceSupport = await encryptVote(daoAddress, signers.alice.address, VOTE_FOR);
+    await expect(
+      dao.connect(signers.alice).castEncryptedVote(proposalId, aliceSupport.handle, aliceSupport.proof),
+    ).to.emit(dao, "EncryptedVoteCast");
+
+    const bobSupport = await encryptVote(daoAddress, signers.bob.address, VOTE_AGAINST);
+    await dao.connect(signers.bob).castEncryptedVote(proposalId, bobSupport.handle, bobSupport.proof);
+
+    // alice(10) FOR, bob(20) AGAINST.
+    const [against, forVotes, abstain] = await dao.proposalVotes(proposalId);
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, against)).to.eq(20n);
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, forVotes)).to.eq(10n);
+    expect(await fhevm.debugger.decryptEuint(FhevmType.euint64, abstain)).to.eq(0n);
+  });
+
+  it("rejects the membership-proof entrypoint when the ZK gate is disabled", async function () {
+    const proposalId = await propose();
+    const support = await encryptVote(daoAddress, signers.alice.address, VOTE_FOR);
+
+    await expect(
+      dao
+        .connect(signers.alice)
+        .castEncryptedVoteWithMembershipProof(proposalId, support.handle, support.proof, ethers.ZeroHash, "0x"),
+    ).to.be.revertedWithCustomError(dao, "PDA__MembershipProofNotEnabled");
+  });
+
+  it("rejects setMembershipRoot when the ZK gate is disabled", async function () {
+    const tree = await buildMembershipTree(IDENTITY_SECRETS);
+    await expect(
+      dao.connect(signers.deployer).setMembershipRoot(toBytes32(tree.membershipRoot)),
+    ).to.be.revertedWithCustomError(dao, "PDA__MembershipProofNotEnabled");
+  });
+
+  it("reverts deployment when a membership root is supplied without a verifier", async function () {
+    const tree = await buildMembershipTree(IDENTITY_SECRETS);
+    const factory = await ethers.getContractFactory("DemoDao");
+    await expect(
+      factory.deploy(tokenAddress, ethers.ZeroAddress, toBytes32(tree.membershipRoot)),
+    ).to.be.revertedWithCustomError(factory, "PDA__InvalidMembershipRoot");
+  });
+
+  it("lets the owner enable the ZK gate at runtime, then enforces membership proofs", async function () {
+    const tree = await buildMembershipTree(IDENTITY_SECRETS);
+    const root = toBytes32(tree.membershipRoot);
+    const { verifierAddress } = await deployVerifier();
+
+    await expect(dao.connect(signers.deployer).setZkMembership(verifierAddress, root))
+      .to.emit(dao, "PDA__ZkMembershipConfigured")
+      .withArgs(verifierAddress, root, true);
+
+    expect(await dao.zkMembershipEnabled()).to.eq(true);
+    expect(await dao.voteSubmissionVerifier()).to.eq(verifierAddress);
+    expect(await dao.membershipRoot()).to.eq(root);
+
+    const proposalId = await propose();
+
+    // The inherited un-gated path is now disabled.
+    const ungated = await encryptVote(daoAddress, signers.alice.address, VOTE_FOR);
+    await expect(
+      dao.connect(signers.alice).castEncryptedVote(proposalId, ungated.handle, ungated.proof),
+    ).to.be.revertedWithCustomError(dao, "PDA__MembershipProofRequired");
+
+    // The membership-proof path now works.
+    const proof = await generateVoteSubmissionProof({
+      proposalId: proposalId % SNARK_SCALAR_FIELD,
+      memberIdentitySecrets: IDENTITY_SECRETS,
+      voterIndex: MEMBER_INDEX.alice,
+    });
+    const support = await encryptVote(daoAddress, signers.alice.address, VOTE_FOR);
+    await expect(
+      dao
+        .connect(signers.alice)
+        .castEncryptedVoteWithMembershipProof(proposalId, support.handle, support.proof, proof.nullifierHash, proof.proof),
+    ).to.emit(dao, "PDA__MembershipVoteCast");
+  });
+
+  it("lets the owner disable the ZK gate again at runtime, restoring un-gated voting", async function () {
+    const tree = await buildMembershipTree(IDENTITY_SECRETS);
+    const { verifierAddress } = await deployVerifier();
+    await dao.connect(signers.deployer).setZkMembership(verifierAddress, toBytes32(tree.membershipRoot));
+    expect(await dao.zkMembershipEnabled()).to.eq(true);
+
+    await expect(dao.connect(signers.deployer).setZkMembership(ethers.ZeroAddress, ethers.ZeroHash))
+      .to.emit(dao, "PDA__ZkMembershipConfigured")
+      .withArgs(ethers.ZeroAddress, ethers.ZeroHash, false);
+    expect(await dao.zkMembershipEnabled()).to.eq(false);
+    expect(await dao.membershipRoot()).to.eq(ethers.ZeroHash);
+
+    const proposalId = await propose();
+    const support = await encryptVote(daoAddress, signers.alice.address, VOTE_FOR);
+    await expect(
+      dao.connect(signers.alice).castEncryptedVote(proposalId, support.handle, support.proof),
+    ).to.emit(dao, "EncryptedVoteCast");
+  });
+
+  it("restricts setZkMembership to the owner and validates its arguments", async function () {
+    const tree = await buildMembershipTree(IDENTITY_SECRETS);
+    const root = toBytes32(tree.membershipRoot);
+    const { verifierAddress } = await deployVerifier();
+
+    await expect(
+      dao.connect(signers.alice).setZkMembership(verifierAddress, root),
+    ).to.be.revertedWithCustomError(dao, "OwnableUnauthorizedAccount");
+
+    // Verifier address with no contract code.
+    await expect(
+      dao.connect(signers.deployer).setZkMembership(signers.alice.address, root),
+    ).to.be.revertedWithCustomError(dao, "PDA__InvalidVerifier");
+
+    // Verifier set but zero root.
+    await expect(
+      dao.connect(signers.deployer).setZkMembership(verifierAddress, ethers.ZeroHash),
+    ).to.be.revertedWithCustomError(dao, "PDA__InvalidMembershipRoot");
+
+    // Zero verifier but non-zero root.
+    await expect(
+      dao.connect(signers.deployer).setZkMembership(ethers.ZeroAddress, root),
+    ).to.be.revertedWithCustomError(dao, "PDA__InvalidMembershipRoot");
+  });
+});

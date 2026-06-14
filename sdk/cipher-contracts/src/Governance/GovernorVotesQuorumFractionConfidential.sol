@@ -5,26 +5,16 @@ pragma solidity ^0.8.27;
 import {GovernorVotesConfidential} from "./GovernorVotesConfidential.sol";
 import {FHE, euint64, euint128} from "@fhevm/solidity/lib/FHE.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {
-    Checkpoints
-} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
+import {Checkpoints} from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
 
-abstract contract GovernorVotesQuorumFractionConfidential is
-    GovernorVotesConfidential
-{
+abstract contract GovernorVotesQuorumFractionConfidential is GovernorVotesConfidential {
     using Checkpoints for Checkpoints.Trace208;
 
     Checkpoints.Trace208 private _quorumNumeratorHistory;
 
-    event QuorumNumeratorUpdated(
-        uint256 oldQuorumNumerator,
-        uint256 newQuorumNumerator
-    );
+    event QuorumNumeratorUpdated(uint256 oldQuorumNumerator, uint256 newQuorumNumerator);
 
-    error GovernorInvalidQuorumFraction(
-        uint256 quorumNumerator,
-        uint256 quorumDenominator
-    );
+    error GovernorInvalidQuorumFraction(uint256 quorumNumerator, uint256 quorumDenominator);
     error GovernorConfidentialQuorumIsEncrypted();
 
     constructor(uint256 quorumNumeratorValue) {
@@ -35,9 +25,7 @@ abstract contract GovernorVotesQuorumFractionConfidential is
         return _quorumNumeratorHistory.latest();
     }
 
-    function quorumNumerator(
-        uint256 timepoint
-    ) public view virtual returns (uint256) {
+    function quorumNumerator(uint256 timepoint) public view virtual returns (uint256) {
         return _optimisticUpperLookupRecent(_quorumNumeratorHistory, timepoint);
     }
 
@@ -49,52 +37,29 @@ abstract contract GovernorVotesQuorumFractionConfidential is
         revert GovernorConfidentialQuorumIsEncrypted();
     }
 
-    function confidentialQuorum(
-        uint256 timepoint
-    ) public virtual returns (euint64) {
+    function confidentialQuorum(uint256 timepoint) public virtual returns (euint64) {
         return _confidentialQuorum(timepoint);
     }
 
-    function updateQuorumNumerator(
-        uint256 newQuorumNumerator
-    ) public virtual onlyGovernance {
+    function updateQuorumNumerator(uint256 newQuorumNumerator) public virtual onlyGovernance {
         _updateQuorumNumerator(newQuorumNumerator);
     }
 
-    function _confidentialQuorum(
-        uint256 timepoint
-    ) internal virtual override returns (euint64) {
+    function _confidentialQuorum(uint256 timepoint) internal virtual override returns (euint64) {
         euint128 supply = FHE.asEuint128(token().getPastTotalSupply(timepoint));
-        euint128 numeratorProduct = FHE.mul(
-            supply,
-            SafeCast.toUint128(quorumNumerator(timepoint))
-        );
+        euint128 numeratorProduct = FHE.mul(supply, SafeCast.toUint128(quorumNumerator(timepoint)));
 
-        return
-            FHE.asEuint64(
-                FHE.div(
-                    numeratorProduct,
-                    SafeCast.toUint128(quorumDenominator())
-                )
-            );
+        return FHE.asEuint64(FHE.div(numeratorProduct, SafeCast.toUint128(quorumDenominator())));
     }
 
-    function _updateQuorumNumerator(
-        uint256 newQuorumNumerator
-    ) internal virtual {
+    function _updateQuorumNumerator(uint256 newQuorumNumerator) internal virtual {
         uint256 denominator = quorumDenominator();
         if (newQuorumNumerator > denominator) {
-            revert GovernorInvalidQuorumFraction(
-                newQuorumNumerator,
-                denominator
-            );
+            revert GovernorInvalidQuorumFraction(newQuorumNumerator, denominator);
         }
 
         uint256 oldQuorumNumerator = quorumNumerator();
-        _quorumNumeratorHistory.push(
-            clock(),
-            SafeCast.toUint208(newQuorumNumerator)
-        );
+        _quorumNumeratorHistory.push(clock(), SafeCast.toUint208(newQuorumNumerator));
 
         emit QuorumNumeratorUpdated(oldQuorumNumerator, newQuorumNumerator);
     }
@@ -104,9 +69,6 @@ abstract contract GovernorVotesQuorumFractionConfidential is
         uint256 timepoint
     ) internal view returns (uint256) {
         (, uint48 key, uint208 value) = ckpts.latestCheckpoint();
-        return
-            key <= timepoint
-                ? value
-                : ckpts.upperLookupRecent(SafeCast.toUint48(timepoint));
+        return key <= timepoint ? value : ckpts.upperLookupRecent(SafeCast.toUint48(timepoint));
     }
 }

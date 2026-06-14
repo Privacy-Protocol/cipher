@@ -1,0 +1,7 @@
+{
+  "ethereum-sepolia": {
+    "chainId": 11155111,
+    "HonkVerifier": "0x6554ebdBc25e9023BC80006775958be57f8d8ea1",
+    "ZKTranscriptLib": "0xa567D41325Cfc5670827eCfDc980f7e381791d27"
+  }
+}

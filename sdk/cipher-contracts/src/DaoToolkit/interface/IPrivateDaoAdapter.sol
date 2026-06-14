@@ -1,126 +1,126 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+pragma solidity ^0.8.27;
 
-import {euint8, euint64} from "@fhevm/solidity/lib/FHE.sol";
+import {externalEuint8, euint64, ebool} from "@fhevm/solidity/lib/FHE.sol";
+import {IGovernorConfidential} from "../../Governance/interfaces/IGovernorConfidential.sol";
 
 /// @title IPrivateDaoAdapter
 /// @author Obaloluwa
-/// @notice Interface for the PrivateDaoAdapter contract.
-interface IPrivateDaoAdapter {
-    //////////////EVENTS///////////////////
-    /// @notice Emitted when a new proposal is created.
-    /// @param proposalId The ID of the newly created proposal.
-    /// @param ballotSize The number of available voting options.
-    /// @param votingPeriod The duration the voting will be open, in seconds.
-    event PDA__ProposalCreated(uint256 indexed proposalId, uint8 ballotSize, uint64 votingPeriod);
+/// @notice External interface for {PrivateDaoAdapter}: a confidential, OpenZeppelin-style Governor
+///         (FHE-encrypted ballots + encrypted tally) with an OPTIONAL zero-knowledge membership
+///         gate. It extends {IGovernorConfidential} (propose / state / execute / etc.) and adds the
+///         confidential voting, result-decryption, and membership-gate surface.
+/// @dev    Use this interface to call a deployed adapter from another contract. To deploy your own
+///         DAO, inherit the concrete {PrivateDaoAdapter} instead.
+interface IPrivateDaoAdapter is IGovernorConfidential {
+    // -----------------------------------------------------------------------
+    // Events
+    // -----------------------------------------------------------------------
 
-    /// @notice Emitted when a user submits an encrypted vote for a proposal.
-    /// @param proposalId The ID of the proposal being voted on.
-    event PDA__VoteSubmitted(uint256 indexed proposalId);
+    /// @notice Emitted when the ZK membership gate is (re)configured (constructor and {setZkMembership}).
+    event PDA__ZkMembershipConfigured(address indexed verifier, bytes32 indexed membershipRoot, bool enabled);
 
-    /// @notice Emitted when the voting period for a proposal ends.
-    /// @param proposalId The ID of the proposal.
-    event PDA__VotingEnded(uint256 indexed proposalId);
+    /// @notice Emitted when the membership root is rotated via {setMembershipRoot}.
+    event PDA__MembershipRootUpdated(bytes32 indexed previousRoot, bytes32 indexed newRoot);
 
-    event PDA__ProposalCreatorUpdated(address indexed previousProposalCreator, address indexed newProposalCreator);
-    event PDA__FinalizerUpdated(address indexed previousFinalizer, address indexed newFinalizer);
+    /// @notice Emitted when a membership-gated vote is accepted (a fresh nullifier was spent).
+    event PDA__MembershipVoteCast(uint256 indexed proposalId, bytes32 nullifierHash);
 
-    /// @notice Emitted when the current encrypted tallies are returned.
-    /// @param proposalId The ID of the proposal.
-    /// @param encryptedTallies The current encrypted tally handles.
-    event PDA__AggregateResultsRevealed(uint256 indexed proposalId, bytes32[] encryptedTallies);
+    // -----------------------------------------------------------------------
+    // Errors
+    // -----------------------------------------------------------------------
 
-    /// @notice Emitted when the results of a closed proposal are revealed.
-    /// @param proposalId The ID of the proposal.
-    /// @param revealedTallies The decrypted results of the voting.
-    event PDA__FinalResultsRevealed(uint256 indexed proposalId, uint64[] indexed revealedTallies);
-
-    //////////////ERRORS///////////////////
-    error PDA__ProposalAlreadyExists();
-    error PDA__InvalidVotingPeriod();
-    error PDA__InvalidBallotSize();
-    error PDA__VotingPeriodEnded();
-    error PDA__ProposalNotExists();
-    error PDA__NullifierAlreadyUsed();
-    error PDA__VotingPeriodNotEnded();
-    error PDA__InvalidMembershipRoot();
-    error PDA__InvalidVoteData();
-    error PDA__InvalidDecryptedTalliesLength();
-    error PDA__VotingPeriodNotStarted();
-    error PDA__LiveRevealNotAllowed();
-    error PDA__VotingAlreadyEnded();
-    error PDA__Unauthorized();
-    error PDA__InvalidAddress();
     error PDA__InvalidVerifier();
+    error PDA__InvalidMembershipRoot();
     error PDA__FieldElementOutOfRange();
-    error PDA__ResultsNotRevealed();
+    error PDA__NullifierAlreadyUsed();
+    error PDA__InvalidMembershipProof();
+    /// @dev Thrown when an un-gated vote entrypoint is used while the ZK gate is enabled.
+    error PDA__MembershipProofRequired();
+    /// @dev Thrown when a ZK-only action is used while the gate is disabled.
+    error PDA__MembershipProofNotEnabled();
 
-    /// @notice Configuration of a proposal.
-    /// @param ballotSize The number of available voting options (e.g., 2: Yes/No, 3: For/Against/Abstain).
-    /// @param votingStart The timestamp when voting begins.
-    /// @param votingEnd The timestamp when voting ends.
-    /// @param membershipRoot The fixed membership root used by the vote-verification circuit.
-    /// @param ended True once final vote revelation has been executed.
-    /// @param exists True if the proposal has been initialized.
-    struct ProposalConfig {
-        uint8 ballotSize;
-        uint256 votingStart;
-        uint256 votingEnd;
-        bytes32 membershipRoot;
-        bool ended;
-        bool exists;
-        bool allowLiveReveal;
-    }
+    // -----------------------------------------------------------------------
+    // Membership gate configuration & introspection
+    // -----------------------------------------------------------------------
 
-    /// @notice Retrieves the basic configuration variables of a stored proposal.
-    /// @dev This generated getter exposes the scalar fields of the struct but not the dynamically sized array.
-    /// @param _proposalId The ID of the proposal to query.
-    /// @return proposal The ProposalConfig of the proposal.
-    function getProposalById(uint256 _proposalId) external view returns (ProposalConfig memory proposal);
+    /// @notice Whether the optional ZK membership gate is enabled (a verifier is configured).
+    function zkMembershipEnabled() external view returns (bool);
 
-    /// @notice Creates a new proposal.
-    /// @param _proposalId The unique identifier for the new proposal.
-    /// @param _ballotSize The number of options available to vote on.
-    /// @param _votingPeriod The duration the voting will be open, in seconds.
-    /// @param _membershipRoot The DAO membership root used for vote proofs on this proposal.
-    /// @return proposal The newly created ProposalConfig representing the initial state.
-    function propose(
-        uint256 _proposalId,
-        uint8 _ballotSize,
-        uint64 _votingPeriod,
-        bool _allowLiveReveal,
-        bytes32 _membershipRoot
-    ) external returns (ProposalConfig memory proposal);
+    /// @notice The Noir membership-proof verifier, or `address(0)` when the gate is disabled.
+    function voteSubmissionVerifier() external view returns (address);
 
-    /// @notice Submits an encrypted vote and a nullifier-backed membership proof for a particular proposal.
-    /// @param _proposalId The ID of the proposal being voted on.
-    /// @param _nullifierHash The proposal-scoped nullifier emitted by the vote-verification circuit.
-    /// @param _zkProof The serialized Noir proof bytes proving membership, nullifier correctness,
-    /// and range validity of a hidden vote witness. This proof does not currently bind that witness to voteData.
-    /// @param voteData The ABI-encoded tuple of (bytes32 encryptedVote, bytes voteProof).
-    function submitEncryptedVote(
-        uint256 _proposalId,
-        bytes32 _nullifierHash,
-        bytes calldata _zkProof,
-        bytes calldata voteData
+    /// @notice The global DAO membership root, or `bytes32(0)` when the gate is disabled.
+    function membershipRoot() external view returns (bytes32);
+
+    /// @notice Whether `nullifierHash` has already been spent on `proposalId`.
+    function nullifierUsed(uint256 proposalId, bytes32 nullifierHash) external view returns (bool);
+
+    /// @notice Owner-only: enable, disable, or reconfigure the ZK gate at runtime.
+    /// @param verifier A deployed Noir verifier to enable the gate, or `address(0)` to disable it.
+    /// @param newMembershipRoot The membership root when enabling; must be `bytes32(0)` when disabling.
+    function setZkMembership(address verifier, bytes32 newMembershipRoot) external;
+
+    /// @notice Owner-only: rotate the membership root (only while the gate is enabled).
+    function setMembershipRoot(bytes32 newMembershipRoot) external;
+
+    // -----------------------------------------------------------------------
+    // Confidential voting
+    // -----------------------------------------------------------------------
+
+    /// @notice Cast an encrypted, token-weighted vote after proving DAO membership in zero knowledge.
+    /// @param proposalId The proposal being voted on.
+    /// @param support The encrypted ballot choice (0 Against / 1 For / 2 Abstain) as an external handle.
+    /// @param supportProof The FHE input proof attesting to `support`.
+    /// @param nullifierHash The proposal-scoped nullifier emitted by the membership circuit.
+    /// @param membershipProof The serialized Noir proof of membership for the current `membershipRoot`.
+    /// @dev The circuit's `proposal_id` public input is taken modulo the BN254 field; the off-chain
+    ///      prover must derive its `proposal_id` (and nullifier) from the same reduced value.
+    function castEncryptedVoteWithMembershipProof(
+        uint256 proposalId,
+        externalEuint8 support,
+        bytes calldata supportProof,
+        bytes32 nullifierHash,
+        bytes calldata membershipProof
+    ) external returns (euint64);
+
+    /// @notice Cast an encrypted vote via the inherited entrypoint. Reverts with
+    ///         {PDA__MembershipProofRequired} while the ZK gate is enabled.
+    function castEncryptedVote(
+        uint256 proposalId,
+        externalEuint8 support,
+        bytes calldata supportProof
+    ) external returns (euint64);
+
+    /// @notice Returns the encrypted Against / For / Abstain tally handles for a proposal.
+    function proposalVotes(
+        uint256 proposalId
+    ) external view returns (euint64 againstVotes, euint64 forVotes, euint64 abstainVotes);
+
+    // -----------------------------------------------------------------------
+    // Result decryption lifecycle
+    // -----------------------------------------------------------------------
+
+    /// @notice After the deadline, makes the encrypted result booleans publicly decryptable.
+    function requestProposalResultDecryption(uint256 proposalId) external;
+
+    /// @notice The encrypted result handles (quorum reached, vote succeeded) for a proposal.
+    function encryptedProposalResult(
+        uint256 proposalId
+    ) external view returns (ebool encryptedQuorumReached, ebool encryptedVoteSucceeded);
+
+    /// @notice Finalizes the result with the KMS-decrypted booleans + proof; resolves {state}.
+    /// @param abiEncodedProposalResult abi.encode(bool quorumReached, bool voteSucceeded).
+    /// @param decryptionProof The KMS decryption proof, re-verified on-chain.
+    function finalizeProposalResult(
+        uint256 proposalId,
+        bytes memory abiEncodedProposalResult,
+        bytes memory decryptionProof
     ) external;
 
-    /// @notice Ends the voting period for a proposal, makes the encrypted tallies publicly decryptable.
-    /// @param _proposalId The ID of the proposal to end voting on.
-    /// @param abiEncodedResults The KMS plaintexts encoded results.
-    /// @param decryptionProof The KMS decryption proof.
-    function endVoting(uint256 _proposalId, bytes calldata abiEncodedResults, bytes calldata decryptionProof)
-        external;
+    /// @notice Whether the (finalized) proposal reached quorum. Reverts if not yet finalized.
+    function quorumReached(uint256 proposalId) external view returns (bool);
 
-    /// @notice Returns the current encrypted tally handles for a proposal without changing decryptability.
-    /// @param _proposalId The ID of the proposal to retrieve the encrypted tallies for.
-    /// @return currentEncryptedTallies The current encrypted tally handles for the proposal.
-    function getCurrentEncryptedTallies(
-        uint256 _proposalId
-    ) external view returns (bytes32[] memory currentEncryptedTallies);
-
-    /// @notice Retrieves the latest revealed tallies for a proposal.
-    /// @param _proposalId The ID of the proposal to query.
-    /// @return tallies The most recently revealed tallies.
-    function getRevealedTallies(uint256 _proposalId) external view returns (uint64[] memory tallies);
+    /// @notice Whether the (finalized) proposal succeeded. Reverts if not yet finalized.
+    function voteSucceeded(uint256 proposalId) external view returns (bool);
 }
