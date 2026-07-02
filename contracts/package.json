@@ -30,6 +30,7 @@
     "@fhevm/solidity": "^0.11.1",
     "@noir-lang/noir_js": "1.0.0-beta.16",
     "@openzeppelin/confidential-contracts": "^0.4.0",
+    "@privacy-protocol/beacon": "^0.1.1",
     "encrypted-types": "^0.0.4"
   },
   "devDependencies": {

@@ -3,6 +3,13 @@ import { time } from "@nomicfoundation/hardhat-network-helpers";
 import { FhevmType } from "@fhevm/hardhat-plugin";
 import { expect } from "chai";
 import { ethers, fhevm } from "hardhat";
+import {
+  buildMembershipTree,
+  MEMBERSHIP_ID as SDK_MEMBERSHIP_ID,
+  proveMembershipFromSecrets,
+  toBytes32,
+  type MembershipProof,
+} from "@privacy-protocol/beacon";
 
 import {
   CircuitRegistry,
@@ -12,14 +19,12 @@ import {
   MyToken,
   VerifierHub,
 } from "../types";
-import { generateVoteSubmissionProof, VoteSubmissionProofPayload } from "../scripts/generateVoteSubmissionProof";
-import { buildMembershipTree, toBytes32 } from "../scripts/proofUtils";
 
 // Cross-product integration test (Cipher × Beacon): the DemoDao verifies membership proofs through
 // Beacon's VerifierHub instead of an embedded verifier. The DAO is wired to a MembershipHubAdapter
 // (an IVerifier shim) that forwards verify(proof, publicInputs) -> hub.verify(MEMBERSHIP_ID, ...).
-// The proof bytes are produced by Cipher's generator, which is byte-identical to the published
-// @privacy-protocol/beacon SDK output (same circuit + verification key).
+// Proofs (and the membership root) are produced by the published @privacy-protocol/beacon SDK — the
+// same client path a real consumer uses — so this test dogfoods the SDK end to end.
 
 // BN254 scalar field — Governor proposalIds (keccak hashes) are reduced into this field before
 // being passed to the membership circuit (scope = proposalId mod p).
@@ -81,14 +86,15 @@ describe("DemoDao × Beacon hub", function () {
   let calldatas: string[];
   const description = "DemoDao × Beacon: fund the membership-gated initiative";
 
-  const proofCache = new Map<number, VoteSubmissionProofPayload>();
+  const proofCache = new Map<number, MembershipProof>();
 
-  async function membershipProofFor(voterIndex: number, reducedProposalId: bigint): Promise<VoteSubmissionProofPayload> {
+  // Dogfood the published SDK: generate the membership proof exactly as a real consumer would.
+  async function membershipProofFor(voterIndex: number, proposalId: bigint): Promise<MembershipProof> {
     const cached = proofCache.get(voterIndex);
     if (cached) return cached;
-    const proof = await generateVoteSubmissionProof({
-      proposalId: reducedProposalId,
-      memberIdentitySecrets: IDENTITY_SECRETS,
+    const proof = await proveMembershipFromSecrets({
+      scope: proposalId % SNARK_SCALAR_FIELD,
+      secrets: IDENTITY_SECRETS,
       voterIndex,
     });
     proofCache.set(voterIndex, proof);
@@ -96,19 +102,20 @@ describe("DemoDao × Beacon hub", function () {
   }
 
   async function castMembershipVote(voter: HardhatEthersSigner, voterIndex: number, proposalId: bigint, support: number) {
-    const proof = await membershipProofFor(voterIndex, proposalId % SNARK_SCALAR_FIELD);
+    const proof = await membershipProofFor(voterIndex, proposalId);
     const encrypted = await encryptVote(daoAddress, voter.address, support);
     return dao
       .connect(voter)
-      .castEncryptedVoteWithMembershipProof(proposalId, encrypted.handle, encrypted.proof, proof.nullifierHash, proof.proof);
+      .castEncryptedVoteWithMembershipProof(proposalId, encrypted.handle, encrypted.proof, proof.nullifier, proof.proof);
   }
 
   before(async function () {
     const eth = await ethers.getSigners();
     signers = { deployer: eth[0], alice: eth[1], bob: eth[2], charlie: eth[3] };
 
+    // Membership root via the SDK — the same Poseidon2 tree a consumer builds off-chain.
     const tree = await buildMembershipTree(IDENTITY_SECRETS);
-    membershipRoot = toBytes32(tree.membershipRoot);
+    membershipRoot = toBytes32(tree.root);
 
     targets = [signers.deployer.address];
     values = [0n];
@@ -185,6 +192,8 @@ describe("DemoDao × Beacon hub", function () {
   }
 
   it("wires the DAO to verify through the Beacon shim and hub", async function () {
+    // Dogfood cross-check: the SDK's MEMBERSHIP_ID is the id wired on-chain.
+    expect(SDK_MEMBERSHIP_ID).to.eq(MEMBERSHIP_ID);
     expect(await dao.zkMembershipEnabled()).to.eq(true);
     expect(await dao.voteSubmissionVerifier()).to.eq(await shim.getAddress());
     expect(await shim.hub()).to.eq(await hub.getAddress());
@@ -205,7 +214,7 @@ describe("DemoDao × Beacon hub", function () {
 
     for (const name of ["alice", "bob", "charlie"] as const) {
       const proof = proofCache.get(MEMBER_INDEX[name])!;
-      expect(await dao.nullifierUsed(proposalId, proof.nullifierHash)).to.eq(true);
+      expect(await dao.nullifierUsed(proposalId, proof.nullifier)).to.eq(true);
     }
 
     // Token-weighted tally: alice(10) + bob(20) FOR, charlie(5) AGAINST.
@@ -233,28 +242,28 @@ describe("DemoDao × Beacon hub", function () {
     // Flip the catalog entry inactive — the hub now rejects, so an otherwise-valid proof fails.
     await registry.connect(signers.deployer).setCircuitActive(MEMBERSHIP_ID, false);
 
-    const proof = await membershipProofFor(MEMBER_INDEX.alice, proposalId % SNARK_SCALAR_FIELD);
+    const proof = await membershipProofFor(MEMBER_INDEX.alice, proposalId);
     const support = await encryptVote(daoAddress, signers.alice.address, VOTE_FOR);
     await expect(
       dao
         .connect(signers.alice)
-        .castEncryptedVoteWithMembershipProof(proposalId, support.handle, support.proof, proof.nullifierHash, proof.proof),
+        .castEncryptedVoteWithMembershipProof(proposalId, support.handle, support.proof, proof.nullifier, proof.proof),
     ).to.be.revertedWithCustomError(hub, "VerifierHub__InactiveCircuit");
   });
 
   it("rejects a membership proof generated for a different proposal", async function () {
     const proposalId = await propose();
 
-    const wrongProof = await generateVoteSubmissionProof({
-      proposalId: (proposalId % SNARK_SCALAR_FIELD) + 1n,
-      memberIdentitySecrets: IDENTITY_SECRETS,
+    const wrongProof = await proveMembershipFromSecrets({
+      scope: (proposalId % SNARK_SCALAR_FIELD) + 1n,
+      secrets: IDENTITY_SECRETS,
       voterIndex: MEMBER_INDEX.alice,
     });
     const support = await encryptVote(daoAddress, signers.alice.address, VOTE_FOR);
     await expect(
       dao
         .connect(signers.alice)
-        .castEncryptedVoteWithMembershipProof(proposalId, support.handle, support.proof, wrongProof.nullifierHash, wrongProof.proof),
+        .castEncryptedVoteWithMembershipProof(proposalId, support.handle, support.proof, wrongProof.nullifier, wrongProof.proof),
     ).to.be.reverted;
   });
 });
